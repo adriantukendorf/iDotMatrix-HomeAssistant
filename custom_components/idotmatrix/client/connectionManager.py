@@ -79,7 +79,7 @@ class ConnectionManager(metaclass=SingletonMeta):
                 await self.client.write_gatt_char(UUID_WRITE_DATA,data[i:i+chunk_size], response=response)
                 await asyncio.sleep(0.05)
 
-            time.sleep(0.01)
+            await asyncio.sleep(0.01)
             return True
 
     async def read(self) -> bytes:
