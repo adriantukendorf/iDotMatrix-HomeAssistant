@@ -34,7 +34,38 @@ async def async_setup_entry(
         IDotMatrixTextAnimation(coordinator, entry),
         IDotMatrixTextColorMode(coordinator, entry),
         IDotMatrixScreenSize(coordinator, entry),
+        IDotMatrixClockFormat(coordinator, entry),
     ])
+
+class IDotMatrixClockFormat(IDotMatrixEntity, SelectEntity):
+    """Selector for Clock Format (12h/24h)."""
+    _attr_icon = "mdi:clock-time-four-outline"
+    _attr_name = "Clock Format"
+    _attr_options = ["24h", "12h"]
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_current_option = self.coordinator.text_settings.get("clock_format", "24h")
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._mac}_clock_format"
+
+    async def async_select_option(self, option: str) -> None:
+        """Select format."""
+        self.coordinator.text_settings["clock_format"] = option
+        self._attr_current_option = option
+        
+        # Update clock immediately
+        s = self.coordinator.text_settings
+        color = s.get("color", [255, 255, 255])
+        style = s.get("clock_style", 0)
+        show_date = s.get("clock_date", True)
+        h24 = option == "24h"
+        
+        await Clock().setMode(style, show_date, h24, color[0], color[1], color[2])
+        self.async_write_ha_state()
 
 class IDotMatrixClockFace(IDotMatrixEntity, SelectEntity):
     """Representation of the Clock Face selector."""
@@ -77,11 +108,16 @@ class IDotMatrixScreenSize(IDotMatrixEntity, SelectEntity):
         # Map option string to index
         if option in CLOCK_STYLES:
             idx = CLOCK_STYLES.index(option)
-            # Retrieve shared color
-            color = self.coordinator.text_settings.get("color", [255, 255, 255])
-            r, g, b = color[0], color[1], color[2]
+            self.coordinator.text_settings["clock_style"] = idx
             
-            await Clock().setMode(idx, True, True, r, g, b)
+            # Retrieve shared settings
+            s = self.coordinator.text_settings
+            color = s.get("color", [255, 255, 255])
+            r, g, b = color[0], color[1], color[2]
+            show_date = s.get("clock_date", True)
+            h24 = s.get("clock_format", "24h") == "24h"
+            
+            await Clock().setMode(idx, show_date, h24, r, g, b)
             self._attr_current_option = option
             self.async_write_ha_state()
 

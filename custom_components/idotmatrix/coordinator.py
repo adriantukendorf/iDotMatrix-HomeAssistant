@@ -43,6 +43,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             "multiline": False,   # Wrap text as image
             "screen_size": 32,    # 32x32 or 16x16
             "brightness": 128,    # 0-255 (mapped to 5-100)
+            "clock_style": 0,     # Default style index
+            "clock_date": True,   # Show date
+            "clock_format": "24h",# 12h or 24h
         }
 
     async def _async_update_data(self):

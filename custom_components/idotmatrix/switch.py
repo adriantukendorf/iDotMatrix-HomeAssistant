@@ -20,7 +20,47 @@ async def async_setup_entry(
     async_add_entities([
         IDotMatrixTextProportional(coordinator, entry),
         IDotMatrixMultiline(coordinator, entry),
+        IDotMatrixClockDate(coordinator, entry),
     ])
+
+class IDotMatrixClockDate(IDotMatrixEntity, SwitchEntity):
+    """Switch to toggle date on clock."""
+
+    _attr_icon = "mdi:calendar"
+    _attr_name = "Clock Show Date"
+    _attr_entity_category = EntityCategory.CONFIG
+    
+    @property
+    def unique_id(self) -> str:
+        return f"{self._mac}_clock_date"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.text_settings.get("clock_date", True)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self.coordinator.text_settings["clock_date"] = True
+        # Update clock immediately
+        s = self.coordinator.text_settings
+        color = s.get("color", [255, 255, 255])
+        style = s.get("clock_style", 0)
+        h24 = s.get("clock_format", "24h") == "24h"
+        
+        from .client.modules.clock import Clock
+        await Clock().setMode(style, True, h24, color[0], color[1], color[2])
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self.coordinator.text_settings["clock_date"] = False
+        # Update clock immediately
+        s = self.coordinator.text_settings
+        color = s.get("color", [255, 255, 255])
+        style = s.get("clock_style", 0)
+        h24 = s.get("clock_format", "24h") == "24h"
+        
+        from .client.modules.clock import Clock
+        await Clock().setMode(style, False, h24, color[0], color[1], color[2])
+        self.async_write_ha_state()
 
 class IDotMatrixTextProportional(IDotMatrixEntity, SwitchEntity):
     """Switch to toggle proportional text rendering."""

@@ -77,11 +77,17 @@ class IDotMatrixLight(IDotMatrixEntity, LightEntity):
         if ATTR_RGB_COLOR in kwargs:
             rgb = kwargs[ATTR_RGB_COLOR]
             self.coordinator.text_settings["color"] = list(rgb)
-            # We don't send color immediately because it's mode-dependent (Clock vs Text).
-            # But the user might expect it. 
-            # If we don't send anything, the color only updates on NEXT action.
-            # Ideally we would resend the last known content if possible, but we don't track it well yet.
-            # So just storing it for now.
+            
+            # Send color update immediately to Clock
+            # We assume user wants to see the color change now.
+            # Ideally we would only update if in Clock mode, but we default to updating Clock.
+            s = self.coordinator.text_settings
+            style = s.get("clock_style", 0)
+            show_date = s.get("clock_date", True)
+            h24 = s.get("clock_format", "24h") == "24h"
+            
+            from .client.modules.clock import Clock
+            await Clock().setMode(style, show_date, h24, rgb[0], rgb[1], rgb[2])
             
         self.async_write_ha_state()
 
