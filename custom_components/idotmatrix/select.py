@@ -36,6 +36,7 @@ class IDotMatrixClockFace(IDotMatrixEntity, SelectEntity):
     _attr_icon = "mdi:clock-digital"
     _attr_options = CLOCK_STYLES
     _attr_name = "Clock Face"
+    _attr_current_option = None
     _attr_unique_id = "clock_face"
 
     @property
