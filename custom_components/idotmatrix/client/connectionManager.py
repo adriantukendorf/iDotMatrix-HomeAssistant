@@ -27,9 +27,16 @@ class ConnectionManager(metaclass=SingletonMeta):
     def __init__(self) -> None:
         self.address: Optional[str] = None
         self.client: Optional[BleakClient] = None
+        self.hass = None
+
+    def set_hass(self, hass):
+        """Set Home Assistant instance for proxy support."""
+        self.hass = hass
 
     @staticmethod
     async def scan() -> List[tuple[str, str]]:
+        # This basic scan might not find proxy devices if not integrated with HA scanning
+        # But we primarily rely on HA config flow now.
         logging.info("scanning for iDotMatrix bluetooth devices...")
         devices = await BleakScanner.discover(return_adv=True)
         filtered_devices: List[tuple[str, str]] = []
@@ -58,9 +65,23 @@ class ConnectionManager(metaclass=SingletonMeta):
 
     async def connect(self) -> None:
         if self.address:
-            if not self.client:
-                self.client = BleakClient(self.address)
-            if not self.client.is_connected:
+            if not self.client or not self.client.is_connected:
+                device = None
+                
+                # Try to get device from HA Bluetooth coordinator (supports Proxies)
+                if self.hass:
+                    from homeassistant.components import bluetooth
+                    device = bluetooth.async_ble_device_from_address(
+                        self.hass, self.address, connectable=True
+                    )
+                
+                if device:
+                    self.logging.info(f"Connecting using HA Bluetooth stack: {device}")
+                    self.client = BleakClient(device)
+                else:
+                    self.logging.info(f"Connecting using direct Bleak address: {self.address}")
+                    self.client = BleakClient(self.address)
+                    
                 await self.client.connect()
                 self.logging.info(f"connected to {self.address}")
         else:

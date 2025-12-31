@@ -28,6 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Initialize the Singleton ConnectionManager with the device address
     manager = ConnectionManager()
+    manager.set_hass(hass)
     manager.address = entry.data[CONF_MAC]
 
     from .coordinator import IDotMatrixCoordinator
