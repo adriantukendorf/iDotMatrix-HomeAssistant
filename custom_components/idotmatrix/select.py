@@ -28,23 +28,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the iDotMatrix select."""
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    # Scan for fonts asynchronously to avoid blocking the loop
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    fonts_path = os.path.join(base_path, "fonts")
-    
-    def get_fonts():
-        options = []
-        if os.path.isdir(fonts_path):
-            for file in os.listdir(fonts_path):
-                if file.endswith((".otf", ".ttf", ".bdf")):
-                    options.append(file)
-        return sorted(options) if options else ["Rain-DRM3.otf"]
-
-    fonts = await hass.async_add_executor_job(get_fonts)
-
     async_add_entities([
         IDotMatrixClockFace(coordinator, entry),
-        IDotMatrixFont(coordinator, entry, fonts),
+        IDotMatrixFont(coordinator, entry),
         IDotMatrixTextAnimation(coordinator, entry),
         IDotMatrixTextColorMode(coordinator, entry),
         IDotMatrixScreenSize(coordinator, entry),
@@ -146,15 +132,33 @@ class IDotMatrixFont(IDotMatrixEntity, SelectEntity):
     _attr_name = "Text Font"
     _attr_entity_category = EntityCategory.CONFIG
 
-    def __init__(self, coordinator, entry, fonts):
+    def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry)
-        self._attr_options = fonts
+        self._attr_options = self._get_fonts()
         # Set default option to first available or saved
         current = self.coordinator.text_settings.get("font", "Rain-DRM3.otf")
         if current in self._attr_options:
             self._attr_current_option = current
         elif self._attr_options:
             self._attr_current_option = self._attr_options[0]
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._mac}_text_font"
+
+    def _get_fonts(self) -> list[str]:
+        """Scan fonts directory."""
+        # Locate fonts dir relative to this file
+        # select.py -> custom_components/idotmatrix/select.py
+        # fonts -> custom_components/idotmatrix/fonts/
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        fonts_path = os.path.join(base_path, "fonts")
+        options = []
+        if os.path.isdir(fonts_path):
+            for file in os.listdir(fonts_path):
+                if file.endswith((".otf", ".ttf", ".bdf")):
+                    options.append(file)
+        return sorted(options) if options else ["Rain-DRM3.otf"]
 
     async def async_select_option(self, option: str) -> None:
         """Select font."""
