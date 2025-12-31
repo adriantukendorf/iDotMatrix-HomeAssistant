@@ -1,7 +1,0 @@
-asyncio
-idotmatrix==0.0.9
-bleak
-pillow
-argparse
-requests
-numpy

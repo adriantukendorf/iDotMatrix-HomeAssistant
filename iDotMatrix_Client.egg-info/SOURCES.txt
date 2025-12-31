@@ -1,8 +1,0 @@
-LICENSE
-README.md
-pyproject.toml
-iDotMatrix_Client.egg-info/PKG-INFO
-iDotMatrix_Client.egg-info/SOURCES.txt
-iDotMatrix_Client.egg-info/dependency_links.txt
-iDotMatrix_Client.egg-info/requires.txt
-iDotMatrix_Client.egg-info/top_level.txt
