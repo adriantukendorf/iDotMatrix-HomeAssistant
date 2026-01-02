@@ -213,6 +213,20 @@ class IDotMatrixCard extends LitElement {
                       .value=${String(layer.y)}
                       @input=${(e) => this._updateLayer(index, "y", parseInt(e.target.value) || 0)}
                     ></ha-textfield>
+                    <ha-textfield
+                      class="coord-input"
+                      label="Sp.X"
+                      type="number"
+                      .value=${String(layer.spacing_x ?? 1)}
+                      @input=${(e) => this._updateLayer(index, "spacing_x", parseInt(e.target.value) || 0)}
+                    ></ha-textfield>
+                    <ha-textfield
+                      class="coord-input"
+                      label="Sp.Y"
+                      type="number"
+                      .value=${String(layer.spacing_y ?? 1)}
+                      @input=${(e) => this._updateLayer(index, "spacing_y", parseInt(e.target.value) || 0)}
+                    ></ha-textfield>
                     <input
                       type="color"
                       .value=${this._rgbToHex(layer.color)}
@@ -241,10 +255,22 @@ class IDotMatrixCard extends LitElement {
               Save to Device
             </mwc-button>
           </div>
+          
+          <div class="actions">
+            <mwc-button @click=${this._saveDesign}>
+              <ha-icon icon="mdi:folder-download"></ha-icon>
+              Save Design
+            </mwc-button>
+            <mwc-button @click=${this._loadDesign}>
+              <ha-icon icon="mdi:folder-upload"></ha-icon>
+              Load Design
+            </mwc-button>
+          </div>
         </div>
       </ha-card>
     `;
   }
+
 
   updated(changedProperties) {
     super.updated(changedProperties);
@@ -254,7 +280,8 @@ class IDotMatrixCard extends LitElement {
       this._subscribeAllLayers();
     }
 
-    if (changedProperties.has("_previews")) {
+    // Redraw canvas when previews or layers change
+    if (changedProperties.has("_previews") || changedProperties.has("_layers")) {
       this._drawCanvas();
     }
   }
@@ -320,23 +347,51 @@ class IDotMatrixCard extends LitElement {
     }
   }
 
-  _drawCanvas() {
+  async _drawCanvas() {
     const canvas = this.shadowRoot?.getElementById("preview");
-    if (!canvas) return;
+    if (!canvas || !this.hass) return;
 
     const ctx = canvas.getContext("2d");
+
+    // Clear canvas first
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, 32, 32);
 
-    this._layers.forEach((layer) => {
-      // Get rendered template value from _previews
-      const text = this._previews[layer.id] || "...";
+    // Prepare layers with resolved template values
+    const layersWithContent = this._layers.map((layer) => ({
+      ...layer,
+      content: this._previews[layer.id] || "",
+      is_template: false, // Already resolved
+    }));
 
-      ctx.fillStyle = `rgb(${layer.color[0]}, ${layer.color[1]}, ${layer.color[2]})`;
-      ctx.font = `${layer.font_size || 10}px monospace`;
-      ctx.textBaseline = "top";
-      ctx.fillText(text, layer.x, layer.y);
-    });
+    try {
+      // Call backend to render using Python/PIL
+      const response = await this.hass.callService(
+        "idotmatrix",
+        "render_preview",
+        {
+          face: { layers: layersWithContent },
+          screen_size: 32,
+        },
+        undefined,
+        true,  // returnResponse
+      );
+
+      if (response?.image) {
+        // Load and draw the base64 image
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, 32, 32);
+        };
+        img.src = response.image;
+      }
+    } catch (e) {
+      console.error("[iDotMatrix] Preview render error:", e);
+      // Fallback: draw placeholder
+      ctx.fillStyle = "#ff0000";
+      ctx.font = "8px monospace";
+      ctx.fillText("ERR", 4, 16);
+    }
   }
 
   _updateLayer(index, prop, value) {
@@ -371,6 +426,8 @@ class IDotMatrixCard extends LitElement {
         template: "",
         x: 0,
         y: 0,
+        spacing_x: 1,
+        spacing_y: 1,
         color: [255, 255, 255],
         font_size: 10,
         is_template: true,
@@ -406,6 +463,65 @@ class IDotMatrixCard extends LitElement {
     // Show toast notification
     const event = new CustomEvent("hass-notification", {
       detail: { message: "Configuration sent to iDotMatrix!" },
+      bubbles: true,
+      composed: true,
+    });
+    this.dispatchEvent(event);
+  }
+
+  _saveDesign() {
+    const designName = prompt("Enter design name:", "My Design");
+    if (!designName) return;
+
+    // Get existing designs
+    const designs = JSON.parse(localStorage.getItem("idotmatrix_designs") || "{}");
+
+    // Save current layers
+    designs[designName] = {
+      name: designName,
+      layers: this._layers,
+      savedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem("idotmatrix_designs", JSON.stringify(designs));
+
+    const event = new CustomEvent("hass-notification", {
+      detail: { message: `Design "${designName}" saved!` },
+      bubbles: true,
+      composed: true,
+    });
+    this.dispatchEvent(event);
+  }
+
+  _loadDesign() {
+    const designs = JSON.parse(localStorage.getItem("idotmatrix_designs") || "{}");
+    const designNames = Object.keys(designs);
+
+    if (designNames.length === 0) {
+      alert("No saved designs found.");
+      return;
+    }
+
+    const designName = prompt(
+      `Available designs:\n${designNames.join("\n")}\n\nEnter design name to load:`
+    );
+
+    if (!designName || !designs[designName]) {
+      alert("Design not found.");
+      return;
+    }
+
+    // Unsubscribe old layers
+    this._unsubscribeAll();
+
+    // Load layers
+    this._layers = designs[designName].layers;
+
+    // Re-subscribe
+    this._subscribeAllLayers();
+
+    const event = new CustomEvent("hass-notification", {
+      detail: { message: `Design "${designName}" loaded!` },
       bubbles: true,
       composed: true,
     });

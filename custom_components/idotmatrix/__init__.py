@@ -80,6 +80,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "set_face", async_set_face)
 
+    # Register render_preview service for pixel-perfect preview
+    async def async_render_preview(call):
+        """Render face preview and return as base64 PNG."""
+        import base64
+        import io
+        
+        face_config = call.data.get("face", {})
+        screen_size = call.data.get("screen_size", 32)
+        layers = face_config.get("layers", [])
+        
+        # Find first coordinator
+        coordinator = None
+        for entry_id, c in hass.data[DOMAIN].items():
+            if isinstance(c, IDotMatrixCoordinator):
+                coordinator = c
+                break
+        
+        if not coordinator:
+            return {"error": "No coordinator found", "image": None}
+        
+        try:
+            # Render using the same Python/PIL renderer as device
+            image = await coordinator._render_face(layers, screen_size)
+            
+            # Convert to base64 PNG
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            buffer.seek(0)
+            b64_image = base64.b64encode(buffer.read()).decode("utf-8")
+            
+            return {"image": f"data:image/png;base64,{b64_image}"}
+        except Exception as e:
+            _LOGGER.error(f"Error rendering preview: {e}")
+            return {"error": str(e), "image": None}
+
+    hass.services.async_register(
+        DOMAIN, 
+        "render_preview", 
+        async_render_preview,
+        supports_response="only"  # This service returns data
+    )
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
