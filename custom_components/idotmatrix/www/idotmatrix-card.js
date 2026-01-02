@@ -16,9 +16,22 @@ class IDotMatrixCard extends LitElement {
       hass: { type: Object },
       config: { type: Object },
       _layers: { type: Array, state: true },
-      _previews: { type: Object, state: true }, // Stores rendered template values by layer ID
+      _previews: { type: Object, state: true },
       _availableFonts: { type: Array, state: true },
+      _triggerEntity: { type: String, state: true },
     };
+  }
+
+  get _availableEntities() {
+    if (!this.hass) return [];
+    return Object.keys(this.hass.states).sort().map(eid => {
+      const state = this.hass.states[eid];
+      const friendlyName = state.attributes?.friendly_name || eid;
+      return {
+        value: eid,
+        label: `${eid} (${friendlyName})`
+      };
+    });
   }
 
   static get styles() {
@@ -72,7 +85,8 @@ class IDotMatrixCard extends LitElement {
         flex-wrap: wrap;
         flex: 1;
       }
-      ha-textfield {
+      ha-textfield,
+      ha-combo-box {
         flex: 1;
         min-width: 150px;
       }
@@ -95,16 +109,7 @@ class IDotMatrixCard extends LitElement {
         color: var(--secondary-text-color);
         margin-top: 4px;
       }
-      .font-select {
-        height: 40px;
-        padding: 0 8px;
-        border-radius: 4px;
-        border: 1px solid var(--divider-color);
-        background: var(--card-background-color);
-        color: var(--primary-text-color);
-        font-size: 12px;
-        min-width: 120px;
-      }
+
       .blur-control {
         display: flex;
         align-items: center;
@@ -121,6 +126,21 @@ class IDotMatrixCard extends LitElement {
         min-width: 20px;
         text-align: center;
       }
+      .trigger-entity {
+        margin-bottom: 16px;
+        padding: 8px;
+        background: var(--secondary-background-color);
+        border-radius: 8px;
+      }
+      .trigger-entity ha-combo-box {
+        width: 100%;
+      }
+      .trigger-hint {
+        font-size: 11px;
+        color: var(--secondary-text-color);
+        display: block;
+        margin-top: 4px;
+      }
     `;
   }
 
@@ -131,6 +151,8 @@ class IDotMatrixCard extends LitElement {
     this._templateSubs = {}; // WebSocket unsubscribe functions
     this._debouncers = {};   // Debounce timers
     this._availableFonts = [{ filename: "Rain-DRM3.otf", name: "Rain DRM3" }]; // Default
+    this._triggerEntity = "";
+    this._triggerUnsub = null;
   }
 
   setConfig(config) {
@@ -151,6 +173,9 @@ class IDotMatrixCard extends LitElement {
         font_size: 10,
       },
     ];
+
+    // Load trigger entity from config for persistence
+    this._triggerEntity = config.trigger_entity || "";
   }
 
   // Graphical card editor using HA's form schema with template selector
@@ -216,6 +241,19 @@ class IDotMatrixCard extends LitElement {
             <canvas id="preview" width="32" height="32"></canvas>
           </div>
 
+          <div class="trigger-entity">
+            <ha-combo-box
+              label="Trigger Entity (auto-refresh)"
+              .value=${this._triggerEntity || ""}
+              .items=${this._availableEntities}
+              item-value-path="value"
+              item-label-path="label"
+              allow-custom-value
+              @value-changed=${(e) => this._setTriggerEntity(e.detail.value)}
+            ></ha-combo-box>
+            <span class="trigger-hint">Refresh display when this entity changes (e.g., sensor.time)</span>
+          </div>
+
           <div class="layers-list">
             ${this._layers.map(
       (layer, index) => html`
@@ -262,15 +300,14 @@ class IDotMatrixCard extends LitElement {
                       .value=${String(layer.spacing_y ?? 1)}
                       @input=${(e) => this._updateLayer(index, "spacing_y", parseInt(e.target.value) || 0)}
                     ></ha-textfield>
-                    <select
-                      class="font-select"
+                    <ha-combo-box
+                      label="Font"
                       .value=${layer.font || "Rain-DRM3.otf"}
-                      @change=${(e) => this._updateLayer(index, "font", e.target.value)}
-                    >
-                      ${this._availableFonts.map(f => html`
-                        <option value="${f.filename}" ?selected=${layer.font === f.filename}>${f.name}</option>
-                      `)}
-                    </select>
+                      .items=${this._availableFonts}
+                      item-value-path="filename"
+                      item-label-path="name"
+                      @value-changed=${(e) => this._updateLayer(index, "font", e.detail.value)}
+                    ></ha-combo-box>
                     <div class="blur-control">
                       <label>Blur</label>
                       <input
@@ -536,12 +573,28 @@ class IDotMatrixCard extends LitElement {
           ...l,
           is_template: true,
         })),
+        trigger_entity: this._triggerEntity || null,
       },
     });
 
     // Show toast notification
     const event = new CustomEvent("hass-notification", {
       detail: { message: "Configuration sent to iDotMatrix!" },
+      bubbles: true,
+      composed: true,
+    });
+    this.dispatchEvent(event);
+  }
+
+  _setTriggerEntity(value) {
+    this._triggerEntity = value;
+
+    // Fire config-changed event to persist in HA dashboard config
+    const newConfig = { ...this.config, trigger_entity: value };
+    this.config = newConfig;
+
+    const event = new CustomEvent("config-changed", {
+      detail: { config: newConfig },
       bubbles: true,
       composed: true,
     });

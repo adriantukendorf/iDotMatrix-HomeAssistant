@@ -105,6 +105,15 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 matches = ENTITY_REGEX.findall(tpl)
                 entities_to_track.update(matches)
         
+        # Add explicit trigger entity if specified (for time-based or other updates)
+        if trigger := face_config.get("trigger_entity"):
+            if isinstance(trigger, str) and trigger.strip():
+                entities_to_track.add(trigger.strip())
+            elif isinstance(trigger, list):
+                for t in trigger:
+                    if t and t.strip():
+                        entities_to_track.add(t.strip())
+        
         # Set up state change listeners
         if entities_to_track:
             _LOGGER.info(f"[iDotMatrix] Tracking entities for auto-update: {entities_to_track}")
