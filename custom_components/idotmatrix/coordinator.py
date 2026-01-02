@@ -154,8 +154,11 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             if l_type == "text":
                 content = ""
                 
-                # Priority: entity > template > content
-                if entity_id := layer.get("entity"):
+                # Priority: content (already resolved) > entity > template
+                if layer.get("content"):
+                    # Content already resolved by frontend
+                    content = layer.get("content", "")
+                elif entity_id := layer.get("entity"):
                     # Get state from entity
                     if state := self.hass.states.get(entity_id):
                         content = state.state
@@ -163,24 +166,26 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                         content = "N/A"
                 elif layer.get("is_template", False) or layer.get("template"):
                     # Render Jinja template
-                    tpl_str = layer.get("template") or layer.get("content", "")
+                    tpl_str = layer.get("template") or ""
                     try:
                         tpl = template.Template(tpl_str, self.hass)
                         content = tpl.async_render(parse_result=False)
                     except Exception as e:
                         content = "ERR"
                         _LOGGER.warning(f"Error evaluating text template: {e}")
-                else:
-                    # Static text
-                    content = layer.get("content", "")
                 
-                # Render Text
-                # Resolve color
+                # Skip empty content
+                if not content:
+                    continue
+                
+                # Render Text using LAYER settings only (not global text_settings)
                 color = tuple(layer.get("color", [255, 255, 255]))
                 font_name = layer.get("font", "Rain-DRM3.otf")
                 font_size = int(layer.get("font_size", 10))
+                spacing_x = int(layer.get("spacing_x", 1))
+                spacing_y = int(layer.get("spacing_y", 1))
                 
-                # Logic to find font path same as before
+                # Resolve font path
                 base_path = os.path.dirname(os.path.abspath(__file__))
                 fonts_dir = os.path.join(base_path, "fonts")
                 font_path = os.path.join(fonts_dir, "Rain-DRM3.otf")
@@ -197,8 +202,18 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                     font = ImageFont.truetype(font_path, font_size)
                 except:
                     font = ImageFont.load_default()
-                    
-                draw.text((x, y), str(content), font=font, fill=color)
+                
+                # Character-by-character rendering with custom spacing
+                current_x = x
+                for char in str(content):
+                    draw.text((current_x, y), char, font=font, fill=color)
+                    # Get character width
+                    try:
+                        bbox = font.getbbox(char)
+                        char_width = bbox[2] - bbox[0] if bbox else font.getlength(char)
+                    except:
+                        char_width = font_size // 2
+                    current_x += int(char_width) + spacing_x
 
             elif l_type == "image":
                  image_path = layer.get("image_path")
@@ -257,10 +272,12 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
              screen_size = int(settings.get("screen_size", 32))
              image = await self._render_face(settings.get("layers", []), screen_size)
              
-             # Upload
+             # Save image in executor to avoid blocking
              with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                image.save(tmp.name)
                 tmp_path = tmp.name
+             
+             await self.hass.async_add_executor_job(image.save, tmp_path)
+             
              try:
                 await IDMImage().setMode(1)
                 await IDMImage().uploadProcessed(tmp_path, pixel_size=screen_size)

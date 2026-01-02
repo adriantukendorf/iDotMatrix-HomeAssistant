@@ -349,7 +349,7 @@ class IDotMatrixCard extends LitElement {
 
   async _drawCanvas() {
     const canvas = this.shadowRoot?.getElementById("preview");
-    if (!canvas || !this.hass) return;
+    if (!canvas || !this.hass?.connection) return;
 
     const ctx = canvas.getContext("2d");
 
@@ -365,25 +365,27 @@ class IDotMatrixCard extends LitElement {
     }));
 
     try {
-      // Call backend to render using Python/PIL
-      const response = await this.hass.callService(
-        "idotmatrix",
-        "render_preview",
-        {
+      // Call backend via WebSocket to render using Python/PIL
+      const response = await this.hass.connection.sendMessagePromise({
+        type: "call_service",
+        domain: "idotmatrix",
+        service: "render_preview",
+        service_data: {
           face: { layers: layersWithContent },
           screen_size: 32,
         },
-        undefined,
-        true,  // returnResponse
-      );
+        return_response: true,
+      });
 
-      if (response?.image) {
+      console.log("[iDotMatrix] Preview response:", response);
+
+      if (response?.response?.image) {
         // Load and draw the base64 image
         const img = new Image();
         img.onload = () => {
           ctx.drawImage(img, 0, 0, 32, 32);
         };
-        img.src = response.image;
+        img.src = response.response.image;
       }
     } catch (e) {
       console.error("[iDotMatrix] Preview render error:", e);
