@@ -36,7 +36,7 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Sources data from any `weather.*` entity, individual sensors (local weather stations!), or a mix.
     - Auto-updates when conditions change.
 - **Bitcoin Ticker**:
-    - Spinning pixel-art Bitcoin coin with the live USD price below it.
+    - The classic Bitcoin logo with the live USD price below it.
     - Price colored by direction of the last move; optional 24h change row.
     - Auto-updates when the price sensor changes.
 - **Device Control**:
@@ -294,7 +294,7 @@ display.
 
 ### Bitcoin Ticker
 
-`idotmatrix.show_bitcoin` renders a spinning pixel-art Bitcoin coin with the
+`idotmatrix.show_bitcoin` renders the classic Bitcoin logo with the
 current USD price below it. The price is colored green or red by the direction
 of its last move, and an optional second row shows the 24h change percentage.
 
