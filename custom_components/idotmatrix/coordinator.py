@@ -27,6 +27,7 @@ from .client.modules.gif import Gif as IDMGif
 from .client.modules.clock import Clock
 from .client.modules.fullscreenColor import FullscreenColor
 from .weather import WeatherData, render_weather_gif, normalize_condition
+from .bitcoin import TickerData, render_bitcoin_gif
 
 
 from homeassistant.helpers import template
@@ -88,6 +89,15 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._weather_debounce_unsub = None
         self._weather_signature: tuple | None = None
         self._weather_lock = asyncio.Lock()
+
+        # Bitcoin ticker mode tracking
+        self._btc_cfg: dict | None = None
+        self._btc_unsubs: list = []
+        self._btc_debounce_unsub = None
+        self._btc_signature: tuple | None = None
+        self._btc_last_price: float | None = None
+        self._btc_direction: int = 0
+        self._btc_lock = asyncio.Lock()
 
         # Shared settings for Text entity
         self.text_settings = {
@@ -833,9 +843,10 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                                displays before advancing to the next (batch mode).
                                Common values: 5, 10, 30, 60, 300. Defaults to 5.
         """
-        # Stop any existing rotation or weather mode
+        # Stop any existing rotation, weather, or ticker mode
         await self.async_stop_gif_rotation()
         await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
         # Clamp interval to uint8 range
@@ -1147,6 +1158,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         """Show the weather dashboard and keep it updated automatically."""
         await self.async_stop_gif_rotation()
         await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
 
         self._weather_cfg = cfg
         entities = [
@@ -1213,3 +1225,110 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._weather_unsubs = []
         self._weather_cfg = None
         self._weather_signature = None
+
+    # ------------------------------------------------------------------
+    # Bitcoin ticker mode
+    # ------------------------------------------------------------------
+
+    async def async_show_bitcoin(self, cfg: dict, force: bool = False) -> bool:
+        """Render the Bitcoin ticker GIF and upload it to the device."""
+        async with self._btc_lock:
+            price = self._read_float_state(cfg.get("price_entity"))
+            if price is None:
+                _LOGGER.warning(
+                    "Bitcoin mode: price entity %s has no numeric state",
+                    cfg.get("price_entity"),
+                )
+                return False
+            change = self._read_float_state(cfg.get("change_entity"))
+
+            # Track direction of the last displayed price move
+            if self._btc_last_price is not None and round(price) != round(
+                self._btc_last_price
+            ):
+                self._btc_direction = 1 if price > self._btc_last_price else -1
+
+            data = TickerData(
+                price=price,
+                direction=self._btc_direction,
+                change_pct=change,
+            )
+            signature = data.signature()
+            if not force and signature == self._btc_signature:
+                _LOGGER.debug("Bitcoin price unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_bitcoin_gif, data, size
+            )
+
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                success = await IDMGif().uploadSingleRaw(tmp_path)
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
+
+            if success:
+                self._btc_signature = signature
+                self._btc_last_price = price
+                _LOGGER.debug(
+                    f"Bitcoin ticker uploaded: ${price:,.0f}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Bitcoin ticker upload failed")
+            return success
+
+    async def async_start_bitcoin_mode(self, cfg: dict) -> None:
+        """Show the Bitcoin ticker and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+
+        self._btc_cfg = cfg
+        entities = [
+            e for e in (cfg.get("price_entity"), cfg.get("change_entity")) if e
+        ]
+        if entities:
+            _LOGGER.info(f"Bitcoin mode tracking entities: {entities}")
+            self._btc_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_btc_state_change
+                )
+            )
+        await self.async_show_bitcoin(cfg, force=True)
+
+    @callback
+    def _on_btc_state_change(self, event: Event) -> None:
+        """Debounce bursts of price updates before re-rendering."""
+        if self._btc_debounce_unsub:
+            self._btc_debounce_unsub()
+        self._btc_debounce_unsub = async_call_later(
+            self.hass, 10, self._btc_debounced_refresh
+        )
+
+    @callback
+    def _btc_debounced_refresh(self, _now) -> None:
+        self._btc_debounce_unsub = None
+        if self._btc_cfg:
+            self.hass.async_create_task(self.async_show_bitcoin(self._btc_cfg))
+
+    async def async_stop_bitcoin_mode(self) -> None:
+        """Stop Bitcoin ticker tracking."""
+        if self._btc_debounce_unsub:
+            self._btc_debounce_unsub()
+            self._btc_debounce_unsub = None
+        for unsub in self._btc_unsubs:
+            unsub()
+        if self._btc_unsubs or self._btc_cfg:
+            _LOGGER.debug("Bitcoin mode stopped")
+        self._btc_unsubs = []
+        self._btc_cfg = None
+        self._btc_signature = None

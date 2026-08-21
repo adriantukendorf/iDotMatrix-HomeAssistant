@@ -153,6 +153,8 @@ _GLYPHS = {
     "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
     "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
     "°": ("01100", "10010", "10010", "01100", "00000", "00000", "00000"),
+    "$": ("00100", "01111", "10100", "01110", "00101", "11110", "00100"),
+    ",": ("00000", "00000", "00000", "00000", "00110", "00110", "01100"),
     "%": ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
     "-": ("00000", "00000", "00000", "01110", "00000", "00000", "00000"),
     ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
@@ -637,27 +639,16 @@ def _assemble_gif(pframes: list, duration: int) -> bytes:
     return bytes(out)
 
 
-def render_weather_gif(data: WeatherData, size: int = 64,
-                       duration: int = 150) -> bytes:
-    """Render the weather dashboard as animated GIF bytes."""
-    cond = (data.condition or "").lower().replace("_", "-")
-    n = 16 if cond in ("lightning", "lightning-rainy") else 12
+def frames_to_gif(frames: list, duration: int) -> bytes:
+    """Encode RGB frames as a device-safe animated GIF.
 
-    label, label_color = CONDITION_LABELS.get(
-        cond, ((data.condition or "?").upper()[:10], (200, 200, 200)))
-
-    frames = []
-    for f in range(n):
-        icon = _render_icon(cond, f, n)
-        if size >= 48:
-            frames.append(_layout_large(data, icon, size, label, label_color))
-        else:
-            frames.append(_layout_small(data, icon, size))
-
-    # Quantize all frames against one shared palette built from every frame.
-    sheet = Image.new("RGB", (size, size * n))
+    All frames are quantized against one shared palette, then spliced into
+    a hand-built container (single global color table, no LCTs).
+    """
+    w, h = frames[0].size
+    sheet = Image.new("RGB", (w, h * len(frames)))
     for i, fr in enumerate(frames):
-        sheet.paste(fr, (0, size * i))
+        sheet.paste(fr, (0, h * i))
     try:
         palette = sheet.quantize(colors=64, method=Image.Quantize.MAXCOVERAGE)
     except Exception:
@@ -684,3 +675,23 @@ def render_weather_gif(data: WeatherData, size: int = 64,
             disposal=2,
         )
         return buf.getvalue()
+
+
+def render_weather_gif(data: WeatherData, size: int = 64,
+                       duration: int = 150) -> bytes:
+    """Render the weather dashboard as animated GIF bytes."""
+    cond = (data.condition or "").lower().replace("_", "-")
+    n = 16 if cond in ("lightning", "lightning-rainy") else 12
+
+    label, label_color = CONDITION_LABELS.get(
+        cond, ((data.condition or "?").upper()[:10], (200, 200, 200)))
+
+    frames = []
+    for f in range(n):
+        icon = _render_icon(cond, f, n)
+        if size >= 48:
+            frames.append(_layout_large(data, icon, size, label, label_color))
+        else:
+            frames.append(_layout_small(data, icon, size))
+
+    return frames_to_gif(frames, duration)

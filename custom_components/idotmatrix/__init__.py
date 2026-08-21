@@ -369,6 +369,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_weather", async_stop_weather)
 
+    # Register show_bitcoin service
+    async def async_show_bitcoin(call):
+        """Handle the show_bitcoin service call."""
+        cfg = {
+            "price_entity": call.data.get("price_entity", "sensor.bitcoin_price"),
+            "change_entity": call.data.get("change_entity"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_bitcoin_mode(cfg)
+                else:
+                    await coordinator.async_show_bitcoin(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_bitcoin", async_show_bitcoin)
+
+    # Register stop_bitcoin service
+    async def async_stop_bitcoin(call):
+        """Handle the stop_bitcoin service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_bitcoin_mode()
+
+    hass.services.async_register(DOMAIN, "stop_bitcoin", async_stop_bitcoin)
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -381,6 +409,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_gif_rotation()
         if hasattr(coordinator, "async_stop_weather_mode"):
             await coordinator.async_stop_weather_mode()
+        if hasattr(coordinator, "async_stop_bitcoin_mode"):
+            await coordinator.async_stop_bitcoin_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
 

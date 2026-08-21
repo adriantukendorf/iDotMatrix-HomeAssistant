@@ -35,6 +35,10 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Animated pixel-art weather display: condition icon, temperature, high/low, humidity and wind.
     - Sources data from any `weather.*` entity, individual sensors (local weather stations!), or a mix.
     - Auto-updates when conditions change.
+- **Bitcoin Ticker**:
+    - Spinning pixel-art Bitcoin coin with the live USD price below it.
+    - Price colored by direction of the last move; optional 24h change row.
+    - Auto-updates when the price sensor changes.
 - **Device Control**:
     - Turn On/Off, set Brightness, color, and screen size (16x16 / 32x32 / 64x64).
 
@@ -287,6 +291,39 @@ Options:
 Starting weather mode stops any running GIF rotation, and calling
 `idotmatrix.display_gif` stops weather mode — the two won't fight over the
 display.
+
+### Bitcoin Ticker
+
+`idotmatrix.show_bitcoin` renders a spinning pixel-art Bitcoin coin with the
+current USD price below it. The price is colored green or red by the direction
+of its last move, and an optional second row shows the 24h change percentage.
+
+```yaml
+action: idotmatrix.show_bitcoin
+data:
+  price_entity: sensor.bitcoin_price
+```
+
+With a 24h change sensor:
+
+```yaml
+action: idotmatrix.show_bitcoin
+data:
+  price_entity: sensor.bitcoin_price
+  change_entity: sensor.bitcoin_24h_change
+```
+
+Like weather mode it **follows the price** by default: updates are debounced
+and only re-uploaded when the rounded dollar price actually changes. Stop with
+`idotmatrix.stop_bitcoin`. The three display modes (GIF rotation, weather,
+Bitcoin) are mutually exclusive — starting one stops the others.
+
+| Field | Description |
+| --- | --- |
+| `price_entity` | Price sensor (default `sensor.bitcoin_price`). |
+| `change_entity` | Optional 24h change % sensor. |
+| `pixel_size` | `64` (default) or `32` (compact layout). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
 
 ### Bluetooth Proxy
 

@@ -153,3 +153,45 @@ show_weather:
 stop_weather:
   name: Stop weather dashboard
   description: Stop weather dashboard auto-updates.
+
+show_bitcoin:
+  name: Show Bitcoin ticker
+  description: >
+    Display an animated Bitcoin price ticker with a spinning pixel-art
+    Bitcoin coin. The price is colored by the direction of its last move
+    (green up, red down). By default the display keeps updating
+    automatically when the price changes.
+  fields:
+    price_entity:
+      required: false
+      description: Sensor with the current USD price. Defaults to sensor.bitcoin_price.
+      default: sensor.bitcoin_price
+      example: sensor.bitcoin_price
+      selector:
+        entity:
+          domain: sensor
+    change_entity:
+      required: false
+      description: Optional sensor with the 24h change percentage, shown below the price.
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full ticker, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the price changes (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_bitcoin:
+  name: Stop Bitcoin ticker
+  description: Stop Bitcoin ticker auto-updates.
