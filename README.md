@@ -31,6 +31,10 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
 - **Icons**:
     - Render `mdi:` icons directly.
     - Use `/local/...png` or URL icons for custom sets. SVG requires Cairo (optional).
+- **Weather Dashboard**:
+    - Animated pixel-art weather display: condition icon, temperature, high/low, humidity and wind.
+    - Sources data from any `weather.*` entity, individual sensors (local weather stations!), or a mix.
+    - Auto-updates when conditions change.
 - **Device Control**:
     - Turn On/Off, set Brightness, color, and screen size (16x16 / 32x32 / 64x64).
 
@@ -218,6 +222,71 @@ Watchdog — re-upload a fresh batch every hour to keep things interesting:
           path: /config/www/idotmatrix/gifs
           rotation_interval: 60
 ```
+
+### Weather Dashboard
+
+`idotmatrix.show_weather` renders an animated weather dashboard entirely on the
+fly — pixel-art condition icons (rotating sun rays, falling rain, lightning
+flashes, twinkling stars), a big color-coded temperature, today's high/low,
+humidity and wind — and uploads it as a looping GIF using the reliable
+single-upload protocol.
+
+Simplest form — everything from one weather entity (condition, temperature,
+humidity, wind, and forecast high/low):
+
+```yaml
+action: idotmatrix.show_weather
+data:
+  weather_entity: weather.openweathermap
+```
+
+Mix and match sources. Sensor overrides win over the weather entity, so you can
+take the condition/forecast from OpenWeatherMap but show the *actual*
+temperature and humidity from a backyard weather station:
+
+```yaml
+action: idotmatrix.show_weather
+data:
+  weather_entity: weather.openweathermap
+  temperature_entity: sensor.gw2000b_outdoor_temperature
+  humidity_entity: sensor.gw2000b_humidity
+```
+
+The condition can also come from a text sensor. OpenWeatherMap description
+strings like `broken clouds` or `light rain` are mapped to the right icon
+automatically, and clear skies switch to a moon-and-stars icon after sunset:
+
+```yaml
+action: idotmatrix.show_weather
+data:
+  condition_entity: sensor.openweathermap_weather
+  temperature_entity: sensor.gw2000b_outdoor_temperature
+  humidity_entity: sensor.gw2000b_humidity
+```
+
+By default the dashboard **follows the weather**: it re-renders and re-uploads
+whenever a source entity changes (debounced, and only when a displayed value
+actually changes — a 0.1° wiggle won't touch the device). Forecast high/low is
+refreshed every 15 minutes. Stop it with:
+
+```yaml
+action: idotmatrix.stop_weather
+```
+
+Options:
+
+| Field | Description |
+| --- | --- |
+| `weather_entity` | Base `weather.*` entity (condition, temp, humidity, wind, forecast high/low). |
+| `condition_entity` | Override the condition from a sensor (HA conditions or free text like "light rain"). |
+| `temperature_entity` / `humidity_entity` / `wind_entity` | Override individual values, e.g. from a local station. |
+| `high_entity` / `low_entity` | Override today's forecast high/low. |
+| `pixel_size` | `64` (default, full dashboard) or `32` (compact layout). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+Starting weather mode stops any running GIF rotation, and calling
+`idotmatrix.display_gif` stops weather mode — the two won't fight over the
+display.
 
 ### Bluetooth Proxy
 

@@ -78,3 +78,78 @@ display_gif:
 stop_gif_rotation:
   name: Stop GIF Rotation
   description: Stop the current GIF rotation if one is running.
+
+show_weather:
+  name: Show weather dashboard
+  description: >
+    Display an animated weather dashboard with pixel-art condition icons,
+    temperature, high/low, humidity and wind. Data comes from a weather
+    entity, individual sensors, or a mix of both (sensor overrides win).
+    By default the display keeps updating automatically when the source
+    entities change.
+  fields:
+    weather_entity:
+      required: false
+      description: Weather entity used for condition, temperature, humidity, wind and forecast high/low.
+      example: weather.openweathermap
+      selector:
+        entity:
+          domain: weather
+    condition_entity:
+      required: false
+      description: Sensor overriding the condition. Accepts HA conditions or free text like "broken clouds" / "light rain" (e.g. an OpenWeatherMap weather sensor).
+      example: sensor.openweathermap_weather
+      selector:
+        entity:
+          domain: sensor
+    temperature_entity:
+      required: false
+      description: Sensor overriding the temperature (e.g. a local weather station).
+      example: sensor.gw2000b_outdoor_temperature
+      selector:
+        entity:
+          domain: sensor
+    humidity_entity:
+      required: false
+      description: Sensor overriding the humidity.
+      example: sensor.gw2000b_humidity
+      selector:
+        entity:
+          domain: sensor
+    wind_entity:
+      required: false
+      description: Sensor overriding the wind speed.
+      selector:
+        entity:
+          domain: sensor
+    high_entity:
+      required: false
+      description: Sensor overriding today's forecast high.
+      selector:
+        entity:
+          domain: sensor
+    low_entity:
+      required: false
+      description: Sensor overriding today's forecast low.
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full dashboard, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when source entities change (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_weather:
+  name: Stop weather dashboard
+  description: Stop weather dashboard auto-updates.

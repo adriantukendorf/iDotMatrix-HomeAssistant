@@ -324,6 +324,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_gif_rotation", async_stop_gif_rotation)
 
+    # Register show_weather service
+    async def async_show_weather(call):
+        """Handle the show_weather service call."""
+        cfg = {
+            k: call.data.get(k)
+            for k in (
+                "weather_entity",
+                "condition_entity",
+                "temperature_entity",
+                "humidity_entity",
+                "wind_entity",
+                "high_entity",
+                "low_entity",
+                "pixel_size",
+            )
+        }
+        follow = call.data.get("follow", True)
+
+        if not any(
+            cfg.get(k) for k in ("weather_entity", "condition_entity", "temperature_entity")
+        ):
+            _LOGGER.error(
+                "show_weather requires at least one of: weather_entity, "
+                "condition_entity, temperature_entity"
+            )
+            return
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_weather_mode(cfg)
+                else:
+                    await coordinator.async_show_weather(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_weather", async_show_weather)
+
+    # Register stop_weather service
+    async def async_stop_weather(call):
+        """Handle the stop_weather service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_weather_mode()
+
+    hass.services.async_register(DOMAIN, "stop_weather", async_stop_weather)
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -334,6 +379,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator._clear_face_tracking()
         if hasattr(coordinator, "async_stop_gif_rotation"):
             await coordinator.async_stop_gif_rotation()
+        if hasattr(coordinator, "async_stop_weather_mode"):
+            await coordinator.async_stop_weather_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
 

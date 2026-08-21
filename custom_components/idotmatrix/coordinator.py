@@ -12,7 +12,11 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 
 from .const import DOMAIN, CONF_DISPLAY_MODE, DISPLAY_MODE_DESIGN, DISPLAY_MODE_TEXT
 from .client.connectionManager import ConnectionManager
@@ -22,6 +26,7 @@ from .client.modules.image import Image as IDMImage
 from .client.modules.gif import Gif as IDMGif
 from .client.modules.clock import Clock
 from .client.modules.fullscreenColor import FullscreenColor
+from .weather import WeatherData, render_weather_gif, normalize_condition
 
 
 from homeassistant.helpers import template
@@ -76,6 +81,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         # GIF rotation tracking
         self._gif_rotation_task: asyncio.Task | None = None
         self._gif_rotation_stop = asyncio.Event()
+
+        # Weather mode tracking
+        self._weather_cfg: dict | None = None
+        self._weather_unsubs: list = []
+        self._weather_debounce_unsub = None
+        self._weather_signature: tuple | None = None
+        self._weather_lock = asyncio.Lock()
 
         # Shared settings for Text entity
         self.text_settings = {
@@ -821,8 +833,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                                displays before advancing to the next (batch mode).
                                Common values: 5, 10, 30, 60, 300. Defaults to 5.
         """
-        # Stop any existing rotation
+        # Stop any existing rotation or weather mode
         await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
         # Clamp interval to uint8 range
@@ -985,3 +998,218 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 pass
             self._gif_rotation_task = None
             _LOGGER.debug("GIF rotation stopped")
+
+    # ------------------------------------------------------------------
+    # Weather dashboard mode
+    # ------------------------------------------------------------------
+
+    def _read_float_state(self, entity_id: str | None) -> float | None:
+        """Read a numeric sensor state, or None if unavailable."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable", "", None):
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
+
+    async def _get_forecast_high_low(self, entity_id: str) -> tuple:
+        """Fetch today's high/low from a weather entity's forecast."""
+        for forecast_type in ("daily", "hourly"):
+            try:
+                resp = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": entity_id, "type": forecast_type},
+                    blocking=True,
+                    return_response=True,
+                )
+            except Exception as e:
+                _LOGGER.debug(f"get_forecasts ({forecast_type}) failed: {e}")
+                continue
+            forecast = ((resp or {}).get(entity_id) or {}).get("forecast") or []
+            if not forecast:
+                continue
+            if forecast_type == "daily":
+                today = forecast[0]
+                return today.get("temperature"), today.get("templow")
+            temps = [
+                e.get("temperature")
+                for e in forecast[:24]
+                if e.get("temperature") is not None
+            ]
+            if temps:
+                return max(temps), min(temps)
+        return None, None
+
+    async def _get_weather_data(self, cfg: dict) -> WeatherData | None:
+        """Assemble weather data from a weather entity and/or sensor overrides."""
+        condition_raw = None
+        temp = humidity = wind = high = low = None
+        temp_unit = self.hass.config.units.temperature_unit
+
+        if entity_id := cfg.get("weather_entity"):
+            state = self.hass.states.get(entity_id)
+            if state and state.state not in ("unknown", "unavailable"):
+                condition_raw = state.state
+                attrs = state.attributes
+                temp = attrs.get("temperature")
+                temp_unit = attrs.get("temperature_unit") or temp_unit
+                humidity = attrs.get("humidity")
+                wind = attrs.get("wind_speed")
+                high, low = await self._get_forecast_high_low(entity_id)
+            else:
+                _LOGGER.warning(f"Weather entity {entity_id} is unavailable")
+
+        # Sensor overrides (e.g. a local weather station for temp/humidity,
+        # an OpenWeatherMap description sensor for the condition)
+        if cond_entity := cfg.get("condition_entity"):
+            state = self.hass.states.get(cond_entity)
+            if state and state.state not in ("unknown", "unavailable"):
+                condition_raw = state.state
+        if (v := self._read_float_state(cfg.get("temperature_entity"))) is not None:
+            temp = v
+            unit_state = self.hass.states.get(cfg["temperature_entity"])
+            if unit_state and (u := unit_state.attributes.get("unit_of_measurement")):
+                temp_unit = u
+        if (v := self._read_float_state(cfg.get("humidity_entity"))) is not None:
+            humidity = v
+        if (v := self._read_float_state(cfg.get("wind_entity"))) is not None:
+            wind = v
+        if (v := self._read_float_state(cfg.get("high_entity"))) is not None:
+            high = v
+        if (v := self._read_float_state(cfg.get("low_entity"))) is not None:
+            low = v
+
+        if condition_raw is None and temp is None:
+            return None
+
+        sun_state = self.hass.states.get("sun.sun")
+        is_night = bool(sun_state and sun_state.state == "below_horizon")
+        condition = normalize_condition(condition_raw, is_night)
+
+        return WeatherData(
+            condition=condition,
+            temperature=temp,
+            temp_unit=temp_unit,
+            humidity=humidity,
+            wind_speed=wind,
+            high=high,
+            low=low,
+        )
+
+    async def async_show_weather(self, cfg: dict, force: bool = False) -> bool:
+        """Render the weather dashboard GIF and upload it to the device."""
+        async with self._weather_lock:
+            data = await self._get_weather_data(cfg)
+            if data is None:
+                _LOGGER.warning(
+                    "Weather mode: no data available (check weather_entity / "
+                    "sensor entities)"
+                )
+                return False
+
+            signature = data.signature()
+            if not force and signature == self._weather_signature:
+                _LOGGER.debug("Weather unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_weather_gif, data, size
+            )
+
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                success = await IDMGif().uploadSingleRaw(tmp_path)
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
+
+            if success:
+                self._weather_signature = signature
+                _LOGGER.debug(
+                    f"Weather dashboard uploaded: {data.condition}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Weather dashboard upload failed")
+            return success
+
+    async def async_start_weather_mode(self, cfg: dict) -> None:
+        """Show the weather dashboard and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+
+        self._weather_cfg = cfg
+        entities = [
+            e
+            for e in (
+                cfg.get(k)
+                for k in (
+                    "weather_entity",
+                    "condition_entity",
+                    "temperature_entity",
+                    "humidity_entity",
+                    "wind_entity",
+                    "high_entity",
+                    "low_entity",
+                )
+            )
+            if e
+        ]
+        if entities:
+            _LOGGER.info(f"Weather mode tracking entities: {entities}")
+            self._weather_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_weather_state_change
+                )
+            )
+        # Periodic refresh catches forecast high/low drift, which doesn't
+        # always fire state change events. Signature check keeps it cheap.
+        self._weather_unsubs.append(
+            async_track_time_interval(
+                self.hass, self._on_weather_timer, timedelta(minutes=15)
+            )
+        )
+        await self.async_show_weather(cfg, force=True)
+
+    @callback
+    def _on_weather_state_change(self, event: Event) -> None:
+        """Debounce bursts of sensor updates before re-rendering."""
+        if self._weather_debounce_unsub:
+            self._weather_debounce_unsub()
+        self._weather_debounce_unsub = async_call_later(
+            self.hass, 10, self._weather_debounced_refresh
+        )
+
+    @callback
+    def _weather_debounced_refresh(self, _now) -> None:
+        self._weather_debounce_unsub = None
+        if self._weather_cfg:
+            self.hass.async_create_task(self.async_show_weather(self._weather_cfg))
+
+    @callback
+    def _on_weather_timer(self, _now) -> None:
+        if self._weather_cfg:
+            self.hass.async_create_task(self.async_show_weather(self._weather_cfg))
+
+    async def async_stop_weather_mode(self) -> None:
+        """Stop weather mode tracking."""
+        if self._weather_debounce_unsub:
+            self._weather_debounce_unsub()
+            self._weather_debounce_unsub = None
+        for unsub in self._weather_unsubs:
+            unsub()
+        if self._weather_unsubs or self._weather_cfg:
+            _LOGGER.debug("Weather mode stopped")
+        self._weather_unsubs = []
+        self._weather_cfg = None
+        self._weather_signature = None
