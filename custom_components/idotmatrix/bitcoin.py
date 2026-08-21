@@ -10,6 +10,7 @@ weather module.
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -106,13 +107,52 @@ def _fit_price(price: float, max_width: int) -> str:
     return f"{price / 1_000_000:.1f}M"
 
 
-def _layout_large(data: TickerData, size: int) -> Image.Image:
+# Sparkle glints on the coin: (x, y, start frame). Each lasts 3 frames,
+# so most of the loop nothing is flashing.
+_SPARKLES = ((20, 6, 4), (46, 28, 14))
+
+# Ember particles drifting up behind the coin: (x, phase offset)
+_EMBERS = ((5, 0.0), (58, 0.17), (13, 0.36), (51, 0.55), (31, 0.74), (61, 0.9))
+_EMBER_COLORS = ((95, 62, 18), (70, 45, 14))
+
+
+def _draw_sparkle(d: ImageDraw.ImageDraw, x: int, y: int, phase: int) -> None:
+    """A small four-pointed glint: appear, flash, fade."""
+    if phase == 1:  # peak: bright 5px cross with dim tips
+        d.point((x, y), fill=(255, 255, 255))
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            d.point((x + dx, y + dy), fill=(255, 245, 200))
+        for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
+            d.point((x + dx, y + dy), fill=(210, 170, 90))
+    else:  # appear / fade: single warm pixel
+        d.point((x, y), fill=(255, 230, 160) if phase == 0 else (200, 165, 90))
+
+
+def _draw_embers(d: ImageDraw.ImageDraw, size: int, t: float) -> None:
+    """Dim warm particles rising slowly in the background."""
+    for i, (x, ph) in enumerate(_EMBERS):
+        rise = (ph + t) % 1.0
+        yy = round((1.0 - rise) * (size - 1))
+        xx = x + round(math.sin(2 * math.pi * (t + ph)))
+        d.point((xx, yy), fill=_EMBER_COLORS[i % 2])
+
+
+def _layout_large(data: TickerData, size: int, f: int = 0,
+                  n: int = 1) -> Image.Image:
     img = Image.new("RGB", (size, size), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    # Background embers first, so the coin and text draw over them
+    _draw_embers(d, size, f / n)
 
     logo = _logo(40)
     img.paste(logo, ((size - 40) // 2, 0), logo)
 
     d = ImageDraw.Draw(img)
+    for sx, sy, start in _SPARKLES:
+        phase = f - start
+        if 0 <= phase <= 2:
+            _draw_sparkle(d, sx, sy, phase)
     price_txt = _fit_price(data.price, size - 2)
     w = _text_width(price_txt)
     _draw_text(d, max(0, (size - w) // 2), 43, price_txt,
@@ -156,14 +196,19 @@ def _layout_small(data: TickerData, size: int) -> Image.Image:
 
 
 def render_bitcoin_gif(data: TickerData, size: int = 64,
-                       duration: int = 1000) -> bytes:
-    """Render the Bitcoin ticker as (static) animated GIF bytes.
+                       duration: int = 160) -> bytes:
+    """Render the Bitcoin ticker as animated GIF bytes.
 
-    The display is static; two identical frames keep the file structurally
-    an animation, matching the GIF shape the device is known to handle.
+    The logo and price are static; subtle background embers drift upward
+    and occasional sparkle glints flash on the coin.
     """
     if size >= 48:
-        frame = _layout_large(data, size)
+        n = 20
+        frames = [_layout_large(data, size, f, n) for f in range(n)]
     else:
+        # Compact layout stays static; two identical frames keep the file
+        # structurally an animation, the GIF shape the device handles.
         frame = _layout_small(data, size)
-    return frames_to_gif([frame, frame.copy()], duration)
+        frames = [frame, frame.copy()]
+        duration = 1000
+    return frames_to_gif(frames, duration)

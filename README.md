@@ -295,7 +295,8 @@ display.
 ### Bitcoin Ticker
 
 `idotmatrix.show_bitcoin` renders the classic Bitcoin logo with the
-current USD price below it. The price is colored green or red by the direction
+current USD price below it, kept alive by subtle animation: occasional
+sparkle glints on the coin and dim ember particles drifting up behind it. The price is colored green or red by the direction
 of its last move, and an optional second row shows the 24h change percentage.
 
 ```yaml
