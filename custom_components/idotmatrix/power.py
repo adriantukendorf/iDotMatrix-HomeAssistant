@@ -128,14 +128,14 @@ def _layout_large(data: PowerData, size: int, f: int = 0,
     lw = _text_width(label)
     _draw_text(d, size - lw - 2, 3, label, color)
 
-    # Row 2 (y=22): Big watts number at scale=2, centered
+    # Row 2 (y=19): Big watts number at scale=2, centered
     watts_txt = f"{data.watts:.0f}"
     w2 = _text_width(watts_txt, scale=2)
-    _draw_text(d, (size - w2) // 2, 22, watts_txt, color, scale=2)
+    _draw_text(d, (size - w2) // 2, 19, watts_txt, color, scale=2)
 
-    # Row 3 (y=39): "WATTS" label centered at scale=1
+    # Row 3 (y=36): "WATTS" label centered at scale=1
     pw = _text_width("WATTS")
-    _draw_text(d, (size - pw) // 2, 39, "WATTS", LABEL_COLOR)
+    _draw_text(d, (size - pw) // 2, 36, "WATTS", LABEL_COLOR)
 
     # Row 4 (y=50): Horizontal bar gauge, full width with margin
     _draw_hbar(d, 2, 50, size - 4, 7, data.watts, f, n)
