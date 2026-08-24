@@ -2,7 +2,8 @@
 
 Renders a large PPM reading with a horizontal color-coded bar gauge.
 Colors shift green -> yellow -> orange -> red based on thresholds.
-A lung icon breathes gently in the corner.
+A CO2 molecule icon (from LaMetric icon set) in the corner changes color
+with the severity level.
 
 Reuses the pixel font, text helpers and device-safe GIF encoder from the
 weather module.
@@ -32,18 +33,16 @@ _THRESHOLDS = (
     (9999, (200, 30, 30), "CRIT"),
 )
 
-_LUNG_BITMAP = (
-    "..XX..XX..",
-    ".XXXX.XXX.",
-    ".XXXX.XXX.",
-    "XXXXX.XXXX",
-    "XXXXX.XXXX",
-    "XXXXX.XXXX",
-    ".XXXX.XXX.",
-    ".XXXX.XXX.",
-    "..XXX.XX..",
-    "...XX.X...",
-    "....X.X...",
+# CO2 molecule icon (8x8) from LaMetric icon set (#8458/8459/8460)
+_CO2_ICON = (
+    "XXX.X...",
+    "X..X.X..",
+    "X..X.X..",
+    "X..X.X..",
+    "XXX.X.XX",
+    ".......X",
+    "......X.",
+    "......XX",
 )
 
 
@@ -69,22 +68,12 @@ class CO2Data:
         return (round(self.ppm),)
 
 
-def _draw_lung(d: ImageDraw.ImageDraw, ox: int, oy: int,
-               color: tuple, scale: float = 1.0) -> None:
-    bw = len(_LUNG_BITMAP[0])
-    bh = len(_LUNG_BITMAP)
-    center_x = ox + bw / 2
-    center_y = oy + bh / 2
-    for r, row in enumerate(_LUNG_BITMAP):
+def _draw_icon(d: ImageDraw.ImageDraw, ox: int, oy: int,
+               color: tuple) -> None:
+    for r, row in enumerate(_CO2_ICON):
         for c, ch in enumerate(row):
             if ch == "X":
-                if scale != 1.0:
-                    cx = round(center_x + (ox + c - center_x) * scale)
-                    cy = round(center_y + (oy + r - center_y) * scale)
-                else:
-                    cx, cy = ox + c, oy + r
-                if 0 <= cx < 64 and 0 <= cy < 64:
-                    d.point((cx, cy), fill=color)
+                d.point((ox + c, oy + r), fill=color)
 
 
 def _draw_hbar(d: ImageDraw.ImageDraw, x: int, y: int,
@@ -107,7 +96,6 @@ def _draw_hbar(d: ImageDraw.ImageDraw, x: int, y: int,
             c = BAD_RED
         d.line([(xx, y + 1), (xx, y + h - 2)], fill=c)
 
-    # Needle marker for current value
     needle_x = x + 1 + round(fill_frac * (w - 2))
     if x < needle_x < x + w - 1:
         d.line([(needle_x, y - 1), (needle_x, y + h)], fill=(255, 255, 255))
@@ -120,39 +108,24 @@ def _layout_large(data: CO2Data, size: int, f: int = 0,
 
     color = _ppm_color(data.ppm)
 
-    # Row 1 (y=2): Lung icon on left + "CO2" label at scale=1
-    breath = 1.0 + 0.08 * math.sin(2 * math.pi * f / n)
-    _draw_lung(d, 2, 2, color, scale=breath)
+    # Row 1 (y=2): CO2 molecule icon on left + status label right
+    _draw_icon(d, 2, 2, color)
 
-    _draw_text(d, 15, 4, "CO2", LABEL_COLOR)
-
-    # Status label top-right (e.g. "GOOD", "POOR")
     label = _ppm_label(data.ppm)
     lw = _text_width(label)
-    _draw_text(d, size - lw - 2, 4, label, color)
+    _draw_text(d, size - lw - 2, 3, label, color)
 
-    # Row 2 (y=16): Big PPM number at scale=2, centered
+    # Row 2 (y=14): Big PPM number at scale=2, centered
     ppm_txt = f"{data.ppm:.0f}"
     w2 = _text_width(ppm_txt, scale=2)
-    _draw_text(d, (size - w2) // 2, 16, ppm_txt, color, scale=2)
+    _draw_text(d, (size - w2) // 2, 14, ppm_txt, color, scale=2)
 
-    # Row 3 (y=32): "ppm" label centered at scale=1
+    # Row 3 (y=30): "ppm" label centered at scale=1
     pw = _text_width("ppm")
-    _draw_text(d, (size - pw) // 2, 33, "ppm", LABEL_COLOR)
+    _draw_text(d, (size - pw) // 2, 31, "ppm", LABEL_COLOR)
 
-    # Row 4 (y=43): Horizontal bar gauge, full width with margin
-    _draw_hbar(d, 2, 43, size - 4, 7, data.ppm)
-
-    # Row 5 (y=53): Tick labels under the bar
-    _draw_text(d, 2, 53, "0", DIM_GRAY)
-    tw6 = _text_width("600")
-    _draw_text(d, round(0.3 * (size - 4)) - tw6 // 2, 53, "600", DIM_GRAY)
-    tw1k = _text_width("1K")
-    _draw_text(d, round(0.5 * (size - 4)) - tw1k // 2, 53, "1K", DIM_GRAY)
-    tw15 = _text_width("1.5K")
-    _draw_text(d, round(0.75 * (size - 4)) - tw15 // 2, 53, "1.5K", DIM_GRAY)
-    tw2 = _text_width("2K")
-    _draw_text(d, size - tw2 - 3, 53, "2K", DIM_GRAY)
+    # Row 4 (y=42): Horizontal bar gauge, full width with margin
+    _draw_hbar(d, 2, 42, size - 4, 7, data.ppm)
 
     # Haze particles when CO2 is high
     if data.ppm >= 1000:
@@ -160,7 +133,7 @@ def _layout_large(data: CO2Data, size: int, f: int = 0,
         for i in range(5):
             phase = t + i * 0.2
             px = round(size * (0.15 + 0.7 * ((phase * 1.3 + i * 0.37) % 1.0)))
-            py = round(38 + 3 * math.sin(2 * math.pi * phase))
+            py = round(37 + 3 * math.sin(2 * math.pi * phase))
             if 0 <= px < size and 0 <= py < size:
                 d.point((px, py), fill=(80, 65, 50))
 
@@ -172,7 +145,7 @@ def _layout_small(data: CO2Data, size: int) -> Image.Image:
     d = ImageDraw.Draw(img)
     color = _ppm_color(data.ppm)
 
-    _draw_text(d, 1, 1, "CO2", LABEL_COLOR)
+    _draw_icon(d, 1, 1, color)
 
     ppm_txt = f"{data.ppm:.0f}"
     w = _text_width(ppm_txt, scale=2)
