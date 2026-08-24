@@ -115,17 +115,17 @@ def _layout_large(data: CO2Data, size: int, f: int = 0,
     lw = _text_width(label)
     _draw_text(d, size - lw - 2, 3, label, color)
 
-    # Row 2 (y=14): Big PPM number at scale=2, centered
+    # Row 2 (y=22): Big PPM number at scale=2, centered
     ppm_txt = f"{data.ppm:.0f}"
     w2 = _text_width(ppm_txt, scale=2)
-    _draw_text(d, (size - w2) // 2, 14, ppm_txt, color, scale=2)
+    _draw_text(d, (size - w2) // 2, 22, ppm_txt, color, scale=2)
 
-    # Row 3 (y=30): "ppm" label centered at scale=1
+    # Row 3 (y=38): "ppm" label centered at scale=1
     pw = _text_width("ppm")
-    _draw_text(d, (size - pw) // 2, 31, "ppm", LABEL_COLOR)
+    _draw_text(d, (size - pw) // 2, 39, "ppm", LABEL_COLOR)
 
-    # Row 4 (y=42): Horizontal bar gauge, full width with margin
-    _draw_hbar(d, 2, 42, size - 4, 7, data.ppm)
+    # Row 4 (y=50): Horizontal bar gauge, full width with margin
+    _draw_hbar(d, 2, 50, size - 4, 7, data.ppm)
 
     # Haze particles when CO2 is high
     if data.ppm >= 1000:
@@ -133,7 +133,7 @@ def _layout_large(data: CO2Data, size: int, f: int = 0,
         for i in range(5):
             phase = t + i * 0.2
             px = round(size * (0.15 + 0.7 * ((phase * 1.3 + i * 0.37) % 1.0)))
-            py = round(37 + 3 * math.sin(2 * math.pi * phase))
+            py = round(45 + 3 * math.sin(2 * math.pi * phase))
             if 0 <= px < size and 0 <= py < size:
                 d.point((px, py), fill=(80, 65, 50))
 
