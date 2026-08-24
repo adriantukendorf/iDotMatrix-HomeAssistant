@@ -941,36 +941,54 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 f"Batch uploading {len(batch)} GIFs from "
                 f"{len(gif_files)} available, interval={interval}s"
             )
-            async def _reset_and_upload_batch():
+            # Deliberately NOT shielded: the batch crawls (minutes) while
+            # the device renders the carousel it's uploading into, and a
+            # shielded batch holds the device lock hostage — every other
+            # mode appears frozen. Cancellation mid-batch is safe now:
+            # _carousel_active stays True, so the next single upload sends
+            # the reset first and clears the partial stream.
+            async with self._device_lock:
                 # Reset first (packets found by 8none1): clears any wedged
                 # upload/parser state left by a previously aborted stream.
                 await Common().reset()
                 await asyncio.sleep(0.6)
-                # Mark before streaming: even a partial batch can leave the
+                # Mark before streaming: even a partial batch leaves the
                 # device in carousel mode.
                 self._carousel_active = True
-                return await IDMGif().uploadBatch(
+                success = await IDMGif().uploadBatch(
                     batch, pixel_size=screen_size, interval=interval, raw=True
                 )
-
-            success = await self._device_call(_reset_and_upload_batch)
             if not success:
                 _LOGGER.error("Batch GIF upload failed")
         else:
             _LOGGER.error(f"Path does not exist: {path}")
 
-    async def _upload_single(self, tmp_path: str) -> bool:
-        """Upload a single GIF, escaping the device's carousel mode first
-        if it's running (the device ignores single uploads mid-carousel;
-        the 8none1 reset verifiably drops it back to idle)."""
+    async def _upload_single(self, gif_bytes: bytes) -> bool:
+        """Upload a single rendered GIF, escaping the device's carousel mode
+        first if it's running (the device ignores single uploads
+        mid-carousel; the 8none1 reset verifiably drops it back to idle).
+
+        The temp file lives entirely inside the shielded task: if the
+        caller is cancelled while waiting for the device lock, an outer
+        finally must not delete the file before the upload reads it."""
         async def run():
-            if self._carousel_active:
-                await Common().reset()
-                await asyncio.sleep(0.6)
-            ok = await IDMGif().uploadSingleRaw(tmp_path)
-            if ok:
-                self._carousel_active = False
-            return ok
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                if self._carousel_active:
+                    await Common().reset()
+                    await asyncio.sleep(0.6)
+                ok = await IDMGif().uploadSingleRaw(tmp_path)
+                if ok:
+                    self._carousel_active = False
+                return ok
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
         return await self._device_call(run)
 
     async def _device_call(self, fn, *args):
@@ -1226,17 +1244,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 render_weather_gif, data, size
             )
 
-            def write_tmp() -> str:
-                fd, path = tempfile.mkstemp(suffix=".gif")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(gif_bytes)
-                return path
-
-            tmp_path = await self.hass.async_add_executor_job(write_tmp)
-            try:
-                success = await self._upload_single(tmp_path)
-            finally:
-                await self.hass.async_add_executor_job(os.remove, tmp_path)
+            success = await self._upload_single(gif_bytes)
 
             if success:
                 self._weather_signature = signature
@@ -1360,17 +1368,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 render_bitcoin_gif, data, size
             )
 
-            def write_tmp() -> str:
-                fd, path = tempfile.mkstemp(suffix=".gif")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(gif_bytes)
-                return path
-
-            tmp_path = await self.hass.async_add_executor_job(write_tmp)
-            try:
-                success = await self._upload_single(tmp_path)
-            finally:
-                await self.hass.async_add_executor_job(os.remove, tmp_path)
+            success = await self._upload_single(gif_bytes)
 
             if success:
                 self._btc_signature = signature
@@ -1459,17 +1457,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 render_co2_gif, data, size
             )
 
-            def write_tmp() -> str:
-                fd, path = tempfile.mkstemp(suffix=".gif")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(gif_bytes)
-                return path
-
-            tmp_path = await self.hass.async_add_executor_job(write_tmp)
-            try:
-                success = await self._upload_single(tmp_path)
-            finally:
-                await self.hass.async_add_executor_job(os.remove, tmp_path)
+            success = await self._upload_single(gif_bytes)
 
             if success:
                 self._co2_signature = signature
@@ -1554,17 +1542,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 render_power_gif, data, size
             )
 
-            def write_tmp() -> str:
-                fd, path = tempfile.mkstemp(suffix=".gif")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(gif_bytes)
-                return path
-
-            tmp_path = await self.hass.async_add_executor_job(write_tmp)
-            try:
-                success = await self._upload_single(tmp_path)
-            finally:
-                await self.hass.async_add_executor_job(os.remove, tmp_path)
+            success = await self._upload_single(gif_bytes)
 
             if success:
                 self._power_signature = signature
@@ -1689,17 +1667,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 render, data, size, self._clock_color(cfg)
             )
 
-            def write_tmp() -> str:
-                fd, path = tempfile.mkstemp(suffix=".gif")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(gif_bytes)
-                return path
-
-            tmp_path = await self.hass.async_add_executor_job(write_tmp)
-            try:
-                success = await self._upload_single(tmp_path)
-            finally:
-                await self.hass.async_add_executor_job(os.remove, tmp_path)
+            success = await self._upload_single(gif_bytes)
 
             if success:
                 self._clock_signature = signature
