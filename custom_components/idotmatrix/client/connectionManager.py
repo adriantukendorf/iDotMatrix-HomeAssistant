@@ -121,7 +121,11 @@ class ConnectionManager(metaclass=SingletonMeta):
     # Match the Android app's BLE write size (MTU 517 - ATT overhead = 509)
     BLE_WRITE_SIZE = 509
 
-    async def send(self, data, response=False):
+    # Default to acknowledged writes: through an ESPHome BLE proxy,
+    # unacknowledged Write Commands are silently dropped under buffer
+    # pressure (observed as e.g. Clock.setMode losing a style change and
+    # the panel staying on the previous face).
+    async def send(self, data, response=True):
         if self.client and self.client.is_connected:
             self.logging.debug("sending %d bytes to device", len(data))
             # Cap chunk size to real BLE MTU regardless of proxy-reported size.

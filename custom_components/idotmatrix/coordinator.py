@@ -1589,7 +1589,10 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                     r=r, g=g, b=b,
                 )
                 if result is False:
-                    _LOGGER.error("Clock mode: invalid native style %s", face)
+                    _LOGGER.error(
+                        "Clock mode: could not set native style %s "
+                        "(invalid style or BLE write failed)", face
+                    )
                     return False
                 _LOGGER.debug("Native clock style %s enabled", face)
                 return True
