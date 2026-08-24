@@ -296,7 +296,7 @@ show_clock:
             - "7"
     color:
       required: false
-      description: Accent color for the pixel face, or text color for native styles. Default [100, 180, 255].
+      description: Accent color (defaults to sky blue for the pixel face, green for analog) or text color for native styles.
       selector:
         color_rgb:
     hour24:

@@ -1565,7 +1565,10 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
     @staticmethod
     def _clock_color(cfg: dict) -> tuple:
-        c = cfg.get("color") or [100, 180, 255]
+        c = cfg.get("color")
+        if not c:
+            # Green tint for the analog dial, sky blue for the pixel face
+            c = [100, 210, 110] if cfg.get("face") == "analog" else [100, 180, 255]
         return (int(c[0]), int(c[1]), int(c[2]))
 
     async def async_show_clock(self, cfg: dict, force: bool = False) -> bool:
