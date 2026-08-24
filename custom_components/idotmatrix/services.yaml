@@ -266,3 +266,65 @@ show_power:
 stop_power:
   name: Stop power gauge
   description: Stop power gauge auto-updates.
+
+show_clock:
+  name: Show clock
+  description: >
+    Display a clock. The default "pixel" face is rendered by the
+    integration in the house pixel-art style (big HH:MM with a blinking
+    colon, weekday, date) and re-uploaded each minute. Faces 0-7 use the
+    device's built-in firmware clock styles, which keep time on the panel
+    itself with no further BLE traffic.
+  fields:
+    face:
+      required: false
+      description: '"pixel" for the custom rendered face, or a native firmware style 0-7.'
+      default: pixel
+      selector:
+        select:
+          options:
+            - "pixel"
+            - "0"
+            - "1"
+            - "2"
+            - "3"
+            - "4"
+            - "5"
+            - "6"
+            - "7"
+    color:
+      required: false
+      description: Accent color for the pixel face, or text color for native styles. Default [100, 180, 255].
+      selector:
+        color_rgb:
+    hour24:
+      required: false
+      description: 24-hour format (default true).
+      default: true
+      selector:
+        boolean:
+    show_date:
+      required: false
+      description: Show the date (default true).
+      default: true
+      selector:
+        boolean:
+    pixel_size:
+      required: false
+      description: Display resolution for the pixel face. 64 renders the full layout, 32 a compact one.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the pixel face updated every minute (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_clock:
+  name: Stop clock
+  description: Stop clock updates (pixel face) and clock mode tracking.

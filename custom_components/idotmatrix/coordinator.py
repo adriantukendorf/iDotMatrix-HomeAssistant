@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_time_change,
     async_track_time_interval,
 )
 
@@ -25,7 +26,9 @@ from .client.modules.text import Text
 from .client.modules.image import Image as IDMImage
 from .client.modules.gif import Gif as IDMGif
 from .client.modules.clock import Clock
+from .client.modules.common import Common
 from .client.modules.fullscreenColor import FullscreenColor
+from .clockface import ClockFaceData, render_clockface_gif
 from .weather import WeatherData, render_weather_gif, normalize_condition
 from .bitcoin import TickerData, render_bitcoin_gif
 from .co2 import CO2Data, render_co2_gif
@@ -114,6 +117,12 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._power_throttle_unsub = None
         self._power_signature: tuple | None = None
         self._power_lock = asyncio.Lock()
+
+        # Clock mode tracking
+        self._clock_cfg: dict | None = None
+        self._clock_unsub = None
+        self._clock_signature: tuple | None = None
+        self._clock_lock = asyncio.Lock()
 
         # Shared settings for Text entity
         self.text_settings = {
@@ -865,6 +874,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
         # Clamp interval to uint8 range
@@ -1179,6 +1189,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
 
         self._weather_cfg = cfg
         entities = [
@@ -1313,6 +1324,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
 
         self._btc_cfg = cfg
         entities = [
@@ -1410,6 +1422,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
 
         self._co2_cfg = cfg
         entities = [e for e in (cfg.get("co2_entity"),) if e]
@@ -1504,6 +1517,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
 
         self._power_cfg = cfg
         entities = [e for e in (cfg.get("power_entity"),) if e]
@@ -1544,3 +1558,112 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._power_unsubs = []
         self._power_cfg = None
         self._power_signature = None
+
+    # ------------------------------------------------------------------
+    # Clock mode
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clock_color(cfg: dict) -> tuple:
+        c = cfg.get("color") or [100, 180, 255]
+        return (int(c[0]), int(c[1]), int(c[2]))
+
+    async def async_show_clock(self, cfg: dict, force: bool = False) -> bool:
+        """Show the clock: custom 'pixel' face or a native device style."""
+        async with self._clock_lock:
+            face = cfg.get("face", "pixel")
+            now = dt_util.now()
+
+            if face != "pixel":
+                # Native firmware clock: sync time, then set the style.
+                # The device renders and updates it on its own after this.
+                await Common().setTime(
+                    now.year, now.month, now.day,
+                    now.hour, now.minute, now.second,
+                )
+                r, g, b = self._clock_color(cfg)
+                result = await Clock().setMode(
+                    style=int(face),
+                    visibleDate=cfg.get("show_date", True),
+                    hour24=cfg.get("hour24", True),
+                    r=r, g=g, b=b,
+                )
+                if result is False:
+                    _LOGGER.error("Clock mode: invalid native style %s", face)
+                    return False
+                _LOGGER.debug("Native clock style %s enabled", face)
+                return True
+
+            data = ClockFaceData(
+                hour=now.hour,
+                minute=now.minute,
+                weekday=now.weekday(),
+                month=now.month,
+                day=now.day,
+                hour24=cfg.get("hour24", True),
+                show_date=cfg.get("show_date", True),
+            )
+            signature = data.signature()
+            if not force and signature == self._clock_signature:
+                _LOGGER.debug("Clock unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_clockface_gif, data, size, self._clock_color(cfg)
+            )
+
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                success = await IDMGif().uploadSingleRaw(tmp_path)
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
+
+            if success:
+                self._clock_signature = signature
+                _LOGGER.debug(
+                    f"Clock face uploaded: {data.hour:02d}:{data.minute:02d}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Clock face upload failed")
+            return success
+
+    async def async_start_clock_mode(self, cfg: dict) -> None:
+        """Show the clock and keep the pixel face updated every minute."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_clock_mode()
+
+        self._clock_cfg = cfg
+        if cfg.get("face", "pixel") == "pixel":
+            # Re-upload on each minute boundary; the native styles keep
+            # time on the device itself and need no listener.
+            self._clock_unsub = async_track_time_change(
+                self.hass, self._on_clock_minute, second=0
+            )
+        await self.async_show_clock(cfg, force=True)
+
+    @callback
+    def _on_clock_minute(self, _now) -> None:
+        if self._clock_cfg:
+            self.hass.async_create_task(self.async_show_clock(self._clock_cfg))
+
+    async def async_stop_clock_mode(self) -> None:
+        """Stop clock tracking."""
+        if self._clock_unsub:
+            self._clock_unsub()
+            self._clock_unsub = None
+        if self._clock_cfg:
+            _LOGGER.debug("Clock mode stopped")
+        self._clock_cfg = None
+        self._clock_signature = None

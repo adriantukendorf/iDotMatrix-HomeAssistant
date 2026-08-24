@@ -451,6 +451,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_power", async_stop_power)
 
+    # Register show_clock service
+    async def async_show_clock(call):
+        """Handle the show_clock service call."""
+        cfg = {
+            "face": call.data.get("face", "pixel"),
+            "color": call.data.get("color"),
+            "hour24": call.data.get("hour24", True),
+            "show_date": call.data.get("show_date", True),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_clock_mode(cfg)
+                else:
+                    await coordinator.async_show_clock(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_clock", async_show_clock)
+
+    # Register stop_clock service
+    async def async_stop_clock(call):
+        """Handle the stop_clock service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_clock_mode()
+
+    hass.services.async_register(DOMAIN, "stop_clock", async_stop_clock)
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -469,6 +499,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_co2_mode()
         if hasattr(coordinator, "async_stop_power_mode"):
             await coordinator.async_stop_power_mode()
+        if hasattr(coordinator, "async_stop_clock_mode"):
+            await coordinator.async_stop_clock_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
 

@@ -47,6 +47,9 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Whole-house power draw in watts with a color-coded bar gauge (0-5 kW).
     - Status label and lightning bolt shift green → yellow → orange → red with load.
     - Auto-updates (throttled to every 15s) as the power sensor changes.
+- **Clock**:
+    - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
+    - Or any of the device's 8 native firmware clock styles (zero BLE traffic once set).
 - **Device Control**:
     - Turn On/Off, set Brightness, color, and screen size (16x16 / 32x32 / 64x64).
 
@@ -380,6 +383,41 @@ Bitcoin, CO2, power) are mutually exclusive — starting one stops the others.
 | `power_entity` | Total active power sensor in watts. |
 | `pixel_size` | `64` (default) or `32` (compact layout). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Clock
+
+`idotmatrix.show_clock` displays a clock. The default `pixel` face is a
+custom design rendered by the integration — big HH:MM in the pixel font
+with a colon that blinks once a second (animated on the device via a tiny
+2-frame GIF), the weekday up top in an accent color, and the date below.
+Home Assistant re-uploads it once a minute (~1.5 KB, sub-second over BLE).
+
+```yaml
+action: idotmatrix.show_clock
+```
+
+Faces `0`-`7` switch to the device's built-in firmware clock styles
+instead — the panel keeps time entirely on its own after a single command
+(the integration syncs the device clock first):
+
+```yaml
+action: idotmatrix.show_clock
+data:
+  face: "3"
+  color: [255, 180, 0]
+```
+
+Stop with `idotmatrix.stop_clock`. Clock mode is mutually exclusive with
+the other display modes, same as the rest.
+
+| Field | Description |
+| --- | --- |
+| `face` | `pixel` (default, custom rendered) or native style `0`-`7`. |
+| `color` | Accent color (pixel face) / text color (native). |
+| `hour24` | `true` (default) or `false` for 12h + AM/PM. |
+| `show_date` | Show the date row (default `true`). |
+| `pixel_size` | `64` (default) or `32` (compact pixel face). |
+| `follow` | `true` (default) keeps the pixel face ticking; `false` renders once. |
 
 ### Bluetooth Proxy
 
