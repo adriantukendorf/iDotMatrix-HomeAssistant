@@ -67,32 +67,32 @@ def _layout_large(data: ClockFaceData, accent: tuple,
     img = Image.new("RGB", (size, size), (0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # Row 1 (y=4): weekday centered in accent, flanked by dim ticks
+    # Row 1 (y=8): weekday centered in accent, flanked by dim ticks
     wd = _WEEKDAYS[data.weekday]
     ww = _text_width(wd)
     wx = (size - ww) // 2
-    _draw_text(d, wx, 4, wd, accent)
-    d.line([(4, 7), (wx - 4, 7)], fill=(45, 45, 50))
-    d.line([(wx + ww + 3, 7), (size - 5, 7)], fill=(45, 45, 50))
+    _draw_text(d, wx, 8, wd, accent)
+    d.line([(4, 11), (wx - 4, 11)], fill=(45, 45, 50))
+    d.line([(wx + ww + 3, 11), (size - 5, 11)], fill=(45, 45, 50))
 
-    # Row 2 (y=20): big HH:MM, blinking colon
-    _draw_time(d, size, 20, data, colon_on, scale=2)
+    # Row 2 (y=24): big HH:MM, blinking colon
+    _draw_time(d, size, 24, data, colon_on, scale=2)
 
     _, suffix = _time_parts(data)
 
     # Accent rule under the time
-    d.line([(10, 38), (size - 11, 38)], fill=accent)
+    d.line([(10, 42), (size - 11, 42)], fill=accent)
 
-    # Row 3 (y=44): date centered in gray (+ AM/PM in 12h mode)
+    # Row 3 (y=48): date centered in gray (+ AM/PM in 12h mode)
     if data.show_date:
         date_txt = f"{_MONTHS[data.month - 1]} {data.day}"
         if suffix:
             date_txt += f" {suffix}"
         dw = _text_width(date_txt)
-        _draw_text(d, (size - dw) // 2, 44, date_txt, LABEL_COLOR)
+        _draw_text(d, (size - dw) // 2, 48, date_txt, LABEL_COLOR)
     elif suffix:
         sw = _text_width(suffix)
-        _draw_text(d, (size - sw) // 2, 44, suffix, LABEL_COLOR)
+        _draw_text(d, (size - sw) // 2, 48, suffix, LABEL_COLOR)
 
     return img
 
