@@ -123,6 +123,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._clock_unsub = None
         self._clock_signature: tuple | None = None
         self._clock_lock = asyncio.Lock()
+        # True while the device is showing a native firmware clock style.
+        # The firmware latches into clock function then: GIF data sent while
+        # latched is stored but not displayed, so GIF modes must exit clock
+        # function first (see _exit_native_clock). Starts True because the
+        # device state after an HA restart is unknown; the first upload then
+        # sends one harmless exit command.
+        self._native_clock_active = True
 
         # Shared settings for Text entity
         self.text_settings = {
@@ -884,6 +891,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         is_file = await self.hass.async_add_executor_job(os.path.isfile, path)
         is_dir = await self.hass.async_add_executor_job(os.path.isdir, path)
 
+        await self._exit_native_clock()
+
         # Determine if path is a file or directory
         if is_file:
             # Single file: use single upload protocol (index=0x0d, no batch
@@ -1167,6 +1176,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return path
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            await self._exit_native_clock()
             try:
                 success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
@@ -1301,6 +1311,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return path
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            await self._exit_native_clock()
             try:
                 success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
@@ -1400,6 +1411,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return path
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            await self._exit_native_clock()
             try:
                 success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
@@ -1495,6 +1507,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return path
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            await self._exit_native_clock()
             try:
                 success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
@@ -1563,6 +1576,21 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
     # Clock mode
     # ------------------------------------------------------------------
 
+    async def _exit_native_clock(self) -> None:
+        """Kick the device out of the native firmware clock function.
+
+        The firmware latches into clock mode after Clock.setMode; GIF data
+        uploaded while latched is stored but the panel keeps rendering the
+        clock. Sending the DIY mode command (same as the set_face image
+        path) releases the latch so the next GIF upload actually displays.
+        """
+        if not self._native_clock_active:
+            return
+        await IDMImage().setMode(1)
+        await asyncio.sleep(0.3)
+        self._native_clock_active = False
+        _LOGGER.debug("Exited native clock function")
+
     @staticmethod
     def _clock_color(cfg: dict) -> tuple:
         c = cfg.get("color") or [100, 180, 255]
@@ -1591,6 +1619,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 if result is False:
                     _LOGGER.error("Clock mode: invalid native style %s", face)
                     return False
+                self._native_clock_active = True
                 _LOGGER.debug("Native clock style %s enabled", face)
                 return True
 
@@ -1620,6 +1649,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return path
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            await self._exit_native_clock()
             try:
                 success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
