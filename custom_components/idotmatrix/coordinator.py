@@ -894,8 +894,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         # Determine if path is a file or directory
         if is_file:
             # Single file: use single upload protocol (index=0x0d, no batch
-            # commands).  This gives the device its full GIF buffer instead of
-            # the smaller per-slot batch buffer (~7 KB).
+            # commands), so the file replaces the display without touching
+            # the 12 carousel slots. (Batch slots handle large files fine —
+            # the folder path below feeds them 100KB+ GIFs reliably.)
             _LOGGER.debug(f"Uploading single GIF (single protocol): {path}")
             async with self._device_lock:
                 success = await IDMGif().uploadSingleRaw(path)
