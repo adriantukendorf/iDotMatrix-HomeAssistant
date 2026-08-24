@@ -91,6 +91,7 @@ show_weather:
     weather_entity:
       required: false
       description: Weather entity used for condition, temperature, humidity, wind and forecast high/low.
+      default: weather.openweathermap
       example: weather.openweathermap
       selector:
         entity:

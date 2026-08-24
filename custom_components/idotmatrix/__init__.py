@@ -328,17 +328,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def async_show_weather(call):
         """Handle the show_weather service call."""
         cfg = {
-            k: call.data.get(k)
-            for k in (
-                "weather_entity",
-                "condition_entity",
-                "temperature_entity",
-                "humidity_entity",
-                "wind_entity",
-                "high_entity",
-                "low_entity",
-                "pixel_size",
-            )
+            "weather_entity": call.data.get("weather_entity", "weather.openweathermap"),
+            "condition_entity": call.data.get("condition_entity"),
+            "temperature_entity": call.data.get("temperature_entity"),
+            "humidity_entity": call.data.get("humidity_entity"),
+            "wind_entity": call.data.get("wind_entity"),
+            "high_entity": call.data.get("high_entity"),
+            "low_entity": call.data.get("low_entity"),
+            "pixel_size": call.data.get("pixel_size"),
         }
         follow = call.data.get("follow", True)
 
