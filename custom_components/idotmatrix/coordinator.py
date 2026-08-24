@@ -84,6 +84,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._mdi_error_logged = False
         self._mdi_unknown_icons: set[str] = set()
 
+        # Serializes every upload/command sequence to the device. Mode
+        # switches (e.g. starting the Photos batch) can otherwise overlap an
+        # in-flight upload (clock minute tick, weather refresh) and the
+        # interleaved chunks corrupt the device parser — observed as reboots
+        # when switching to Photos while the device is busy.
+        self._device_lock = asyncio.Lock()
+
         # GIF rotation tracking
         self._gif_rotation_task: asyncio.Task | None = None
         self._gif_rotation_stop = asyncio.Event()
@@ -890,7 +897,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             # commands).  This gives the device its full GIF buffer instead of
             # the smaller per-slot batch buffer (~7 KB).
             _LOGGER.debug(f"Uploading single GIF (single protocol): {path}")
-            success = await IDMGif().uploadSingleRaw(path)
+            async with self._device_lock:
+                success = await IDMGif().uploadSingleRaw(path)
             if not success:
                 _LOGGER.error(f"Single GIF upload failed: {path}")
         elif is_dir:
@@ -916,9 +924,10 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 f"Batch uploading {len(batch)} GIFs from "
                 f"{len(gif_files)} available, interval={interval}s"
             )
-            success = await IDMGif().uploadBatch(
-                batch, pixel_size=screen_size, interval=interval, raw=True
-            )
+            async with self._device_lock:
+                success = await IDMGif().uploadBatch(
+                    batch, pixel_size=screen_size, interval=interval, raw=True
+                )
             if not success:
                 _LOGGER.error("Batch GIF upload failed")
         else:
@@ -1168,7 +1177,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await IDMGif().uploadSingleRaw(tmp_path)
+                async with self._device_lock:
+                    success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1302,7 +1312,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await IDMGif().uploadSingleRaw(tmp_path)
+                async with self._device_lock:
+                    success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1401,7 +1412,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await IDMGif().uploadSingleRaw(tmp_path)
+                async with self._device_lock:
+                    success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1496,7 +1508,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await IDMGif().uploadSingleRaw(tmp_path)
+                async with self._device_lock:
+                    success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1580,17 +1593,18 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             if face not in ("pixel", "analog"):
                 # Native firmware clock: sync time, then set the style.
                 # The device renders and updates it on its own after this.
-                await Common().setTime(
-                    now.year, now.month, now.day,
-                    now.hour, now.minute, now.second,
-                )
-                r, g, b = self._clock_color(cfg)
-                result = await Clock().setMode(
-                    style=int(face),
-                    visibleDate=cfg.get("show_date", True),
-                    hour24=cfg.get("hour24", True),
-                    r=r, g=g, b=b,
-                )
+                async with self._device_lock:
+                    await Common().setTime(
+                        now.year, now.month, now.day,
+                        now.hour, now.minute, now.second,
+                    )
+                    r, g, b = self._clock_color(cfg)
+                    result = await Clock().setMode(
+                        style=int(face),
+                        visibleDate=cfg.get("show_date", True),
+                        hour24=cfg.get("hour24", True),
+                        r=r, g=g, b=b,
+                    )
                 if result is False:
                     _LOGGER.error(
                         "Clock mode: could not set native style %s "
@@ -1628,7 +1642,8 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await IDMGif().uploadSingleRaw(tmp_path)
+                async with self._device_lock:
+                    success = await IDMGif().uploadSingleRaw(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
