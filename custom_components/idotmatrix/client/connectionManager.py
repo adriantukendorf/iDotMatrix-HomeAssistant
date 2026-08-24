@@ -128,20 +128,57 @@ class ConnectionManager(metaclass=SingletonMeta):
     async def send(self, data, response=True):
         if self.client and self.client.is_connected:
             self.logging.debug("sending %d bytes to device", len(data))
-            # Cap chunk size to real BLE MTU regardless of proxy-reported size.
-            # ESPHome BLE proxies report a large WiFi-based MTU, but the actual
-            # BLE radio to the device uses ~509-byte packets at ~25ms intervals.
-            reported = self.client.services.get_characteristic(UUID_WRITE_DATA).max_write_without_response_size
-            chunk_size = min(reported, self.BLE_WRITE_SIZE)
-            for i in range(0, len(data), chunk_size):
-                await self.client.write_gatt_char(UUID_WRITE_DATA, data[i:i+chunk_size], response=response)
-                # Pace writes to match the BLE connection interval (~25ms).
-                # The Android app's BLE stack provides this pacing via L2CAP
-                # flow control; through an ESPHome proxy we must add it manually
-                # to prevent flooding the proxy's BLE transmit buffer.
-                await asyncio.sleep(0.025)
+            progress = {"writes": 0}
+            try:
+                return await self._write_chunks(data, response, progress)
+            except Exception as err:
+                # Retry once, but ONLY if nothing went out yet: resending
+                # after a partial write would duplicate bytes and corrupt
+                # the file the device is assembling. This covers the
+                # reconnect race where a write is attempted before service
+                # discovery resolves ("Characteristic ... was not found")
+                # and stale connections discovered on the first write.
+                if progress["writes"]:
+                    raise
+                self.logging.warning(
+                    "BLE write failed before any data was sent (%s); "
+                    "reconnecting and retrying once", err,
+                )
+                await self._force_reconnect()
+                if not (self.client and self.client.is_connected):
+                    raise
+                return await self._write_chunks(data, response, {"writes": 0})
 
-            return True
+    async def _write_chunks(self, data, response, progress):
+        # Cap chunk size to real BLE MTU regardless of proxy-reported size.
+        # ESPHome BLE proxies report a large WiFi-based MTU, but the actual
+        # BLE radio to the device uses ~509-byte packets at ~25ms intervals.
+        reported = self.client.services.get_characteristic(UUID_WRITE_DATA).max_write_without_response_size
+        chunk_size = min(reported, self.BLE_WRITE_SIZE)
+        for i in range(0, len(data), chunk_size):
+            await self.client.write_gatt_char(UUID_WRITE_DATA, data[i:i+chunk_size], response=response)
+            progress["writes"] += 1
+            # Pace writes to match the BLE connection interval (~25ms).
+            # The Android app's BLE stack provides this pacing via L2CAP
+            # flow control; through an ESPHome proxy we must add it manually
+            # to prevent flooding the proxy's BLE transmit buffer.
+            await asyncio.sleep(0.025)
+
+        return True
+
+    async def _force_reconnect(self):
+        """Tear down the stale client and reconnect with full service
+        discovery. A quick implicit reconnect can leave the client without
+        resolved characteristics."""
+        try:
+            if self.client:
+                await self.client.disconnect()
+        except Exception:
+            pass
+        self.client = None
+        await self.connect()
+        # Give service resolution a beat before the retried write.
+        await asyncio.sleep(0.5)
 
     async def read(self) -> bytes:
         if self.client and self.client.is_connected:
