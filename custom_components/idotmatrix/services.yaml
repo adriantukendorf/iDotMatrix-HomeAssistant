@@ -196,3 +196,38 @@ show_bitcoin:
 stop_bitcoin:
   name: Stop Bitcoin ticker
   description: Stop Bitcoin ticker auto-updates.
+
+show_co2:
+  name: Show CO2 gauge
+  description: >
+    Display a CO2 concentration gauge with a color-coded bar and status
+    label (Good/OK/Fair/Poor/Bad). The gauge updates automatically when
+    the sensor value changes.
+  fields:
+    co2_entity:
+      required: false
+      description: Sensor with the current CO2 concentration in ppm.
+      default: sensor.aranet4_19d46_carbon_dioxide
+      example: sensor.aranet4_19d46_carbon_dioxide
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full gauge, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the CO2 level changes (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_co2:
+  name: Stop CO2 gauge
+  description: Stop CO2 gauge auto-updates.

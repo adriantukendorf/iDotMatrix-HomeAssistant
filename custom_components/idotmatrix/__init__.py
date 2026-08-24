@@ -394,6 +394,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_bitcoin", async_stop_bitcoin)
 
+    # Register show_co2 service
+    async def async_show_co2(call):
+        """Handle the show_co2 service call."""
+        cfg = {
+            "co2_entity": call.data.get("co2_entity", "sensor.aranet4_19d46_carbon_dioxide"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_co2_mode(cfg)
+                else:
+                    await coordinator.async_show_co2(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_co2", async_show_co2)
+
+    # Register stop_co2 service
+    async def async_stop_co2(call):
+        """Handle the stop_co2 service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_co2_mode()
+
+    hass.services.async_register(DOMAIN, "stop_co2", async_stop_co2)
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -408,6 +435,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_weather_mode()
         if hasattr(coordinator, "async_stop_bitcoin_mode"):
             await coordinator.async_stop_bitcoin_mode()
+        if hasattr(coordinator, "async_stop_co2_mode"):
+            await coordinator.async_stop_co2_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
 

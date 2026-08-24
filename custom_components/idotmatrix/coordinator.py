@@ -28,6 +28,7 @@ from .client.modules.clock import Clock
 from .client.modules.fullscreenColor import FullscreenColor
 from .weather import WeatherData, render_weather_gif, normalize_condition
 from .bitcoin import TickerData, render_bitcoin_gif
+from .co2 import CO2Data, render_co2_gif
 
 
 from homeassistant.helpers import template
@@ -98,6 +99,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._btc_last_price: float | None = None
         self._btc_direction: int = 0
         self._btc_lock = asyncio.Lock()
+
+        # CO2 gauge mode tracking
+        self._co2_cfg: dict | None = None
+        self._co2_unsubs: list = []
+        self._co2_debounce_unsub = None
+        self._co2_signature: tuple | None = None
+        self._co2_lock = asyncio.Lock()
 
         # Shared settings for Text entity
         self.text_settings = {
@@ -847,6 +855,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_gif_rotation()
         await self.async_stop_weather_mode()
         await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
         # Clamp interval to uint8 range
@@ -1159,6 +1168,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_gif_rotation()
         await self.async_stop_weather_mode()
         await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
 
         self._weather_cfg = cfg
         entities = [
@@ -1291,6 +1301,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_gif_rotation()
         await self.async_stop_weather_mode()
         await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
 
         self._btc_cfg = cfg
         entities = [
@@ -1332,3 +1343,96 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._btc_unsubs = []
         self._btc_cfg = None
         self._btc_signature = None
+
+    # ------------------------------------------------------------------
+    # CO2 gauge mode
+    # ------------------------------------------------------------------
+
+    async def async_show_co2(self, cfg: dict, force: bool = False) -> bool:
+        """Render the CO2 gauge GIF and upload it to the device."""
+        async with self._co2_lock:
+            ppm = self._read_float_state(cfg.get("co2_entity"))
+            if ppm is None:
+                _LOGGER.warning(
+                    "CO2 mode: entity %s has no numeric state",
+                    cfg.get("co2_entity"),
+                )
+                return False
+
+            data = CO2Data(ppm=ppm)
+            signature = data.signature()
+            if not force and signature == self._co2_signature:
+                _LOGGER.debug("CO2 unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_co2_gif, data, size
+            )
+
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                success = await IDMGif().uploadSingleRaw(tmp_path)
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
+
+            if success:
+                self._co2_signature = signature
+                _LOGGER.debug(
+                    f"CO2 gauge uploaded: {ppm:.0f} ppm, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("CO2 gauge upload failed")
+            return success
+
+    async def async_start_co2_mode(self, cfg: dict) -> None:
+        """Show the CO2 gauge and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+
+        self._co2_cfg = cfg
+        entities = [e for e in (cfg.get("co2_entity"),) if e]
+        if entities:
+            _LOGGER.info(f"CO2 mode tracking entities: {entities}")
+            self._co2_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_co2_state_change
+                )
+            )
+        await self.async_show_co2(cfg, force=True)
+
+    @callback
+    def _on_co2_state_change(self, event: Event) -> None:
+        if self._co2_debounce_unsub:
+            self._co2_debounce_unsub()
+        self._co2_debounce_unsub = async_call_later(
+            self.hass, 30, self._co2_debounced_refresh
+        )
+
+    @callback
+    def _co2_debounced_refresh(self, _now) -> None:
+        self._co2_debounce_unsub = None
+        if self._co2_cfg:
+            self.hass.async_create_task(self.async_show_co2(self._co2_cfg))
+
+    async def async_stop_co2_mode(self) -> None:
+        """Stop CO2 gauge tracking."""
+        if self._co2_debounce_unsub:
+            self._co2_debounce_unsub()
+            self._co2_debounce_unsub = None
+        for unsub in self._co2_unsubs:
+            unsub()
+        if self._co2_unsubs or self._co2_cfg:
+            _LOGGER.debug("CO2 mode stopped")
+        self._co2_unsubs = []
+        self._co2_cfg = None
+        self._co2_signature = None
