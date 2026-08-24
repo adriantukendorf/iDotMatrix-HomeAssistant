@@ -898,8 +898,15 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             # the 12 carousel slots. (Batch slots handle large files fine —
             # the folder path below feeds them 100KB+ GIFs reliably.)
             _LOGGER.debug(f"Uploading single GIF (single protocol): {path}")
-            async with self._device_lock:
-                success = await IDMGif().uploadSingleRaw(path)
+
+            async def _reset_and_upload_single():
+                # Reset first (packets found by 8none1): clears any wedged
+                # upload/parser state left by a previously aborted stream.
+                await Common().reset()
+                await asyncio.sleep(0.6)
+                return await IDMGif().uploadSingleRaw(path)
+
+            success = await self._device_call(_reset_and_upload_single)
             if not success:
                 _LOGGER.error(f"Single GIF upload failed: {path}")
         elif is_dir:
@@ -925,14 +932,37 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 f"Batch uploading {len(batch)} GIFs from "
                 f"{len(gif_files)} available, interval={interval}s"
             )
-            async with self._device_lock:
-                success = await IDMGif().uploadBatch(
+            async def _reset_and_upload_batch():
+                # Reset first (packets found by 8none1): clears any wedged
+                # upload/parser state left by a previously aborted stream.
+                await Common().reset()
+                await asyncio.sleep(0.6)
+                return await IDMGif().uploadBatch(
                     batch, pixel_size=screen_size, interval=interval, raw=True
                 )
+
+            success = await self._device_call(_reset_and_upload_batch)
             if not success:
                 _LOGGER.error("Batch GIF upload failed")
         else:
             _LOGGER.error(f"Path does not exist: {path}")
+
+    async def _device_call(self, fn, *args):
+        """Run a device write sequence under the device lock, shielded from
+        task cancellation.
+
+        A restarted automation/script cancels the service call it was
+        running; aborting an upload mid-stream leaves the device parser
+        waiting for the rest of the file, and the next upload's bytes get
+        consumed as bogus continuation data (wedged parser / reboot).
+        Shielding lets an upload that has started always run to completion
+        while the caller still sees the cancellation.
+        """
+        return await asyncio.shield(self._device_call_locked(fn, *args))
+
+    async def _device_call_locked(self, fn, *args):
+        async with self._device_lock:
+            return await fn(*args)
 
     async def _upload_gif(self, file_path: str, pixel_size: int) -> bool:
         """Upload a single GIF to the device with retry logic."""
@@ -1178,8 +1208,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                async with self._device_lock:
-                    success = await IDMGif().uploadSingleRaw(tmp_path)
+                success = await self._device_call(
+                    IDMGif().uploadSingleRaw, tmp_path
+                )
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1313,8 +1344,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                async with self._device_lock:
-                    success = await IDMGif().uploadSingleRaw(tmp_path)
+                success = await self._device_call(
+                    IDMGif().uploadSingleRaw, tmp_path
+                )
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1413,8 +1445,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                async with self._device_lock:
-                    success = await IDMGif().uploadSingleRaw(tmp_path)
+                success = await self._device_call(
+                    IDMGif().uploadSingleRaw, tmp_path
+                )
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1509,8 +1542,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                async with self._device_lock:
-                    success = await IDMGif().uploadSingleRaw(tmp_path)
+                success = await self._device_call(
+                    IDMGif().uploadSingleRaw, tmp_path
+                )
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1594,18 +1628,20 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             if face not in ("pixel", "analog"):
                 # Native firmware clock: sync time, then set the style.
                 # The device renders and updates it on its own after this.
-                async with self._device_lock:
+                async def _sync_and_set_clock():
                     await Common().setTime(
                         now.year, now.month, now.day,
                         now.hour, now.minute, now.second,
                     )
                     r, g, b = self._clock_color(cfg)
-                    result = await Clock().setMode(
+                    return await Clock().setMode(
                         style=int(face),
                         visibleDate=cfg.get("show_date", True),
                         hour24=cfg.get("hour24", True),
                         r=r, g=g, b=b,
                     )
+
+                result = await self._device_call(_sync_and_set_clock)
                 if result is False:
                     _LOGGER.error(
                         "Clock mode: could not set native style %s "
@@ -1643,8 +1679,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                async with self._device_lock:
-                    success = await IDMGif().uploadSingleRaw(tmp_path)
+                success = await self._device_call(
+                    IDMGif().uploadSingleRaw, tmp_path
+                )
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
