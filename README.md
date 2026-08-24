@@ -39,6 +39,14 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - The classic Bitcoin logo with the live USD price below it.
     - Price colored by direction of the last move; optional 24h change row.
     - Auto-updates when the price sensor changes.
+- **CO2 Gauge**:
+    - Big ppm reading with a color-coded bar gauge and air-quality label (Good → Crit).
+    - CO2 molecule icon changes color with severity; haze particles drift by when levels are high.
+    - Auto-updates when the CO2 sensor changes.
+- **Power Gauge**:
+    - Whole-house power draw in watts with a color-coded bar gauge (0-5 kW).
+    - Status label and lightning bolt shift green → yellow → orange → red with load.
+    - Auto-updates (throttled to every 15s) as the power sensor changes.
 - **Device Control**:
     - Turn On/Off, set Brightness, color, and screen size (16x16 / 32x32 / 64x64).
 
@@ -323,6 +331,53 @@ Bitcoin) are mutually exclusive — starting one stops the others.
 | --- | --- |
 | `price_entity` | Price sensor (default `sensor.bitcoin_price`). |
 | `change_entity` | Optional 24h change % sensor. |
+| `pixel_size` | `64` (default) or `32` (compact layout). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### CO2 Gauge
+
+`idotmatrix.show_co2` renders indoor air quality: a big ppm reading, a
+status label (Good/OK/Fair/Poor/Bad/Crit) and a horizontal bar gauge scaled
+0-2000 ppm that shifts green → yellow → orange → red as concentration rises.
+The CO2 molecule icon (borrowed from the LaMetric icon set) changes color
+with severity, and dim haze particles drift across when levels top 1000 ppm.
+
+```yaml
+action: idotmatrix.show_co2
+data:
+  co2_entity: sensor.aranet4_19d46_carbon_dioxide
+```
+
+Updates are debounced by 30 seconds and skipped when the rounded ppm value
+hasn't changed. Stop with `idotmatrix.stop_co2`.
+
+| Field | Description |
+| --- | --- |
+| `co2_entity` | CO2 concentration sensor in ppm. |
+| `pixel_size` | `64` (default) or `32` (compact layout). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Power Gauge
+
+`idotmatrix.show_power` renders whole-house power usage: a big watts
+reading, a status label (Low/Norm/Med/High/Peak/Max) and a horizontal bar
+gauge scaled 0-5000 W that shifts green → yellow → orange → red as load
+climbs. A white spark travels along the filled bar to suggest current flow.
+
+```yaml
+action: idotmatrix.show_power
+data:
+  power_entity: sensor.shellypro3em_0cb815fd2f44_total_active_power
+```
+
+Because power sensors update near-continuously, updates are throttled to at
+most one upload every 15 seconds, and tiny fluctuations (< 25 W) are ignored.
+Stop with `idotmatrix.stop_power`. All display modes (GIF rotation, weather,
+Bitcoin, CO2, power) are mutually exclusive — starting one stops the others.
+
+| Field | Description |
+| --- | --- |
+| `power_entity` | Total active power sensor in watts. |
 | `pixel_size` | `64` (default) or `32` (compact layout). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
 
