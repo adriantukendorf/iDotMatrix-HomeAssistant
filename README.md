@@ -49,6 +49,7 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Auto-updates (throttled to every 15s) as the power sensor changes.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
+    - Custom "analog" face: minimal dial with accent ticks, smooth anti-aliased hands, pulsing center dot.
     - Or any of the device's 8 native firmware clock styles (zero BLE traffic once set).
 - **Device Control**:
     - Turn On/Off, set Brightness, color, and screen size (16x16 / 32x32 / 64x64).
@@ -412,8 +413,8 @@ the other display modes, same as the rest.
 
 | Field | Description |
 | --- | --- |
-| `face` | `pixel` (default, custom rendered) or native style `0`-`7`. |
-| `color` | Accent color (pixel face) / text color (native). |
+| `face` | `pixel` (default) or `analog` (custom rendered), or native style `0`-`7`. |
+| `color` | Accent color (pixel/analog faces) / text color (native). |
 | `hour24` | `true` (default) or `false` for 12h + AM/PM. |
 | `show_date` | Show the date row (default `true`). |
 | `pixel_size` | `64` (default) or `32` (compact pixel face). |

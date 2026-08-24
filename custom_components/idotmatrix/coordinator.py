@@ -28,7 +28,7 @@ from .client.modules.gif import Gif as IDMGif
 from .client.modules.clock import Clock
 from .client.modules.common import Common
 from .client.modules.fullscreenColor import FullscreenColor
-from .clockface import ClockFaceData, render_clockface_gif
+from .clockface import ClockFaceData, render_analog_gif, render_clockface_gif
 from .weather import WeatherData, render_weather_gif, normalize_condition
 from .bitcoin import TickerData, render_bitcoin_gif
 from .co2 import CO2Data, render_co2_gif
@@ -1574,7 +1574,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             face = cfg.get("face", "pixel")
             now = dt_util.now()
 
-            if face != "pixel":
+            if face not in ("pixel", "analog"):
                 # Native firmware clock: sync time, then set the style.
                 # The device renders and updates it on its own after this.
                 await Common().setTime(
@@ -1612,8 +1612,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 return True
 
             size = int(cfg.get("pixel_size") or 64)
+            render = render_analog_gif if face == "analog" else render_clockface_gif
             gif_bytes = await self.hass.async_add_executor_job(
-                render_clockface_gif, data, size, self._clock_color(cfg)
+                render, data, size, self._clock_color(cfg)
             )
 
             def write_tmp() -> str:
@@ -1648,7 +1649,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_clock_mode()
 
         self._clock_cfg = cfg
-        if cfg.get("face", "pixel") == "pixel":
+        if cfg.get("face", "pixel") in ("pixel", "analog"):
             # Re-upload on each minute boundary; the native styles keep
             # time on the device itself and need no listener.
             self._clock_unsub = async_track_time_change(

@@ -272,18 +272,20 @@ show_clock:
   description: >
     Display a clock. The default "pixel" face is rendered by the
     integration in the house pixel-art style (big HH:MM with a blinking
-    colon, weekday, date) and re-uploaded each minute. Faces 0-7 use the
-    device's built-in firmware clock styles, which keep time on the panel
-    itself with no further BLE traffic.
+    colon, weekday, date); "analog" is a minimal dial with accent ticks,
+    smooth hands and a pulsing center dot. Both are re-uploaded each
+    minute. Faces 0-7 use the device's built-in firmware clock styles,
+    which keep time on the panel itself with no further BLE traffic.
   fields:
     face:
       required: false
-      description: '"pixel" for the custom rendered face, or a native firmware style 0-7.'
+      description: '"pixel" or "analog" for the custom rendered faces, or a native firmware style 0-7.'
       default: pixel
       selector:
         select:
           options:
             - "pixel"
+            - "analog"
             - "0"
             - "1"
             - "2"
