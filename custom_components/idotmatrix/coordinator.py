@@ -91,6 +91,12 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         # when switching to Photos while the device is busy.
         self._device_lock = asyncio.Lock()
 
+        # True while the device runs the batch carousel: it ignores single
+        # GIF uploads in that state (Feb 2026 finding), so the next single
+        # upload must send the 8none1 reset first to escape it. Starts True
+        # because the device state after an HA restart is unknown.
+        self._carousel_active = True
+
         # GIF rotation tracking
         self._gif_rotation_task: asyncio.Task | None = None
         self._gif_rotation_stop = asyncio.Event()
@@ -904,7 +910,10 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 # upload/parser state left by a previously aborted stream.
                 await Common().reset()
                 await asyncio.sleep(0.6)
-                return await IDMGif().uploadSingleRaw(path)
+                ok = await IDMGif().uploadSingleRaw(path)
+                if ok:
+                    self._carousel_active = False
+                return ok
 
             success = await self._device_call(_reset_and_upload_single)
             if not success:
@@ -937,6 +946,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 # upload/parser state left by a previously aborted stream.
                 await Common().reset()
                 await asyncio.sleep(0.6)
+                # Mark before streaming: even a partial batch can leave the
+                # device in carousel mode.
+                self._carousel_active = True
                 return await IDMGif().uploadBatch(
                     batch, pixel_size=screen_size, interval=interval, raw=True
                 )
@@ -946,6 +958,20 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Batch GIF upload failed")
         else:
             _LOGGER.error(f"Path does not exist: {path}")
+
+    async def _upload_single(self, tmp_path: str) -> bool:
+        """Upload a single GIF, escaping the device's carousel mode first
+        if it's running (the device ignores single uploads mid-carousel;
+        the 8none1 reset verifiably drops it back to idle)."""
+        async def run():
+            if self._carousel_active:
+                await Common().reset()
+                await asyncio.sleep(0.6)
+            ok = await IDMGif().uploadSingleRaw(tmp_path)
+            if ok:
+                self._carousel_active = False
+            return ok
+        return await self._device_call(run)
 
     async def _device_call(self, fn, *args):
         """Run a device write sequence under the device lock, shielded from
@@ -1208,9 +1234,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await self._device_call(
-                    IDMGif().uploadSingleRaw, tmp_path
-                )
+                success = await self._upload_single(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1344,9 +1368,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await self._device_call(
-                    IDMGif().uploadSingleRaw, tmp_path
-                )
+                success = await self._upload_single(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1445,9 +1467,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await self._device_call(
-                    IDMGif().uploadSingleRaw, tmp_path
-                )
+                success = await self._upload_single(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1542,9 +1562,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await self._device_call(
-                    IDMGif().uploadSingleRaw, tmp_path
-                )
+                success = await self._upload_single(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
@@ -1679,9 +1697,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
             tmp_path = await self.hass.async_add_executor_job(write_tmp)
             try:
-                success = await self._device_call(
-                    IDMGif().uploadSingleRaw, tmp_path
-                )
+                success = await self._upload_single(tmp_path)
             finally:
                 await self.hass.async_add_executor_job(os.remove, tmp_path)
 
