@@ -56,6 +56,10 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Horizon with the sun travelling an arc from sunrise to sunset; the moon takes the arc at night.
     - Sunrise and sunset times, daylight length, and a countdown to the next event.
     - Uses the home location from Home Assistant; refreshes every minute.
+- **Moon Phase**:
+    - Large moon disc with the real terminator curve, maria texture, and twinkling stars.
+    - Phase name, illuminated percentage, and days until the next full or new moon.
+    - Computed from the date, no entity needed; refreshes hourly.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
     - Custom "analog" face: minimal dial with accent ticks, smooth anti-aliased hands, pulsing center dot.
@@ -456,6 +460,30 @@ when nothing visible changed. Stop with `idotmatrix.stop_sun`.
 | --- | --- |
 | `hour24` | `true` (default) for 24-hour times, `false` for 12-hour. |
 | `pixel_size` | `64` (default) or `32` (compact arc with the next event time). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Moon Phase
+
+`idotmatrix.show_moon` renders the moon as a large disc whose lit portion
+follows the real terminator curve for the current lunar age, drawn
+supersampled for a smooth edge with a few darker maria for texture. The
+phase name is stacked at the top (for example "WAXING" / "GIBBOUS"), and the
+illuminated percentage and days until the next full or new moon run along
+the bottom. Stars twinkle around the disc. In the southern hemisphere the
+lit side is mirrored automatically.
+
+```yaml
+action: idotmatrix.show_moon
+```
+
+The phase is computed from the date using the mean synodic month, accurate
+to within roughly half a day, so no entity is needed. It refreshes hourly
+and uploads only when a visible value changes. Stop with
+`idotmatrix.stop_moon`.
+
+| Field | Description |
+| --- | --- |
+| `pixel_size` | `64` (default) or `32` (compact disc with the illumination). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
 
 ### Clock

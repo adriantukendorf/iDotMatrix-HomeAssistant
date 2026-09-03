@@ -359,6 +359,35 @@ stop_sun:
   name: Stop sunrise / sunset arc
   description: Stop sun arc auto-updates.
 
+show_moon:
+  name: Show moon phase
+  description: >
+    Display the current moon phase as a large disc with the correct
+    terminator shape, the phase name, the illuminated percentage and the
+    days until the next full or new moon. Computed from the date, so no
+    entity is needed; the lit side is mirrored in the southern hemisphere.
+    Refreshes hourly.
+  fields:
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full layout, 32 a compact disc with the illumination.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_moon:
+  name: Stop moon phase
+  description: Stop moon phase auto-updates.
+
 show_clock:
   name: Show clock
   description: >

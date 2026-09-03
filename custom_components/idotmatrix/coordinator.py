@@ -35,6 +35,7 @@ from .co2 import CO2Data, render_co2_gif
 from .power import PowerData, render_power_gif
 from .thermostat import ThermostatData, ZoneState, render_thermostat_gif
 from .sun import SunData, render_sun_gif
+from .moon import MoonData, moon_age, render_moon_gif
 
 
 from homeassistant.helpers import template
@@ -139,6 +140,12 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._sun_unsub = None
         self._sun_signature: tuple | None = None
         self._sun_lock = asyncio.Lock()
+
+        # Moon phase mode tracking
+        self._moon_cfg: dict | None = None
+        self._moon_unsub = None
+        self._moon_signature: tuple | None = None
+        self._moon_lock = asyncio.Lock()
 
         # Thermostat mode tracking
         self._thermostat_cfg: dict | None = None
@@ -905,6 +912,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
@@ -1312,6 +1320,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._weather_cfg = cfg
@@ -1439,6 +1448,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._btc_cfg = cfg
@@ -1529,6 +1539,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._co2_cfg = cfg
@@ -1622,6 +1633,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._power_cfg = cfg
@@ -1715,6 +1727,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._thermostat_cfg = cfg
@@ -1862,6 +1875,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._sun_cfg = cfg
@@ -1886,6 +1900,72 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Sun mode stopped")
         self._sun_cfg = None
         self._sun_signature = None
+
+    # ------------------------------------------------------------------
+    # Moon phase mode
+    # ------------------------------------------------------------------
+
+    async def async_show_moon(self, cfg: dict, force: bool = False) -> bool:
+        """Render the moon phase GIF and upload it to the device."""
+        async with self._moon_lock:
+            south = (self.hass.config.latitude or 0) < 0
+            data = MoonData(age=moon_age(dt_util.utcnow()), south=south)
+            signature = data.signature()
+            if not force and signature == self._moon_signature:
+                _LOGGER.debug("Moon phase unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_moon_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._moon_signature = signature
+                _LOGGER.debug(
+                    f"Moon phase uploaded: age {data.age:.1f}d, "
+                    f"{data.pct_txt()}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Moon phase upload failed")
+            return success
+
+    async def async_start_moon_mode(self, cfg: dict) -> None:
+        """Show the moon phase and refresh it hourly."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+
+        self._moon_cfg = cfg
+        # The phase moves ~3% per day; an hourly check with the signature
+        # guard uploads only when a visible value actually changes.
+        self._moon_unsub = async_track_time_change(
+            self.hass, self._on_moon_hour, minute=0, second=30
+        )
+        await self.async_show_moon(cfg, force=True)
+
+    @callback
+    def _on_moon_hour(self, _now) -> None:
+        if self._moon_cfg:
+            self.hass.async_create_task(self.async_show_moon(self._moon_cfg))
+
+    async def async_stop_moon_mode(self) -> None:
+        """Stop moon phase tracking."""
+        if self._moon_unsub:
+            self._moon_unsub()
+            self._moon_unsub = None
+        if self._moon_cfg:
+            _LOGGER.debug("Moon mode stopped")
+        self._moon_cfg = None
+        self._moon_signature = None
 
     # ------------------------------------------------------------------
     # Clock mode
@@ -1972,6 +2052,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
         await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
 
         self._clock_cfg = cfg

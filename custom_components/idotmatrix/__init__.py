@@ -512,6 +512,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_sun", async_stop_sun)
 
+    # Register show_moon service
+    async def async_show_moon(call):
+        """Handle the show_moon service call."""
+        cfg = {"pixel_size": call.data.get("pixel_size")}
+        follow = call.data.get("follow", True)
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_moon_mode(cfg)
+                else:
+                    await coordinator.async_show_moon(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_moon", async_show_moon)
+
+    # Register stop_moon service
+    async def async_stop_moon(call):
+        """Handle the stop_moon service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_moon_mode()
+
+    hass.services.async_register(DOMAIN, "stop_moon", async_stop_moon)
+
     # Register show_clock service
     async def async_show_clock(call):
         """Handle the show_clock service call."""
@@ -564,6 +588,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_thermostat_mode()
         if hasattr(coordinator, "async_stop_sun_mode"):
             await coordinator.async_stop_sun_mode()
+        if hasattr(coordinator, "async_stop_moon_mode"):
+            await coordinator.async_stop_moon_mode()
         if hasattr(coordinator, "async_stop_clock_mode"):
             await coordinator.async_stop_clock_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
