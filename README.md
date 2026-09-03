@@ -47,6 +47,11 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Whole-house power draw in watts with a color-coded bar gauge (0-5 kW).
     - Status label and lightning bolt shift green → yellow → orange → red with load.
     - Auto-updates (throttled to every 15s) as the power sensor changes.
+    - Optional thermostat entities flag when the furnace or AC is behind a spike ("HEAT ON" / "AC ON").
+- **Thermostat Status**:
+    - Heating and cooling zones as two stacked panels: flame / snowflake icon, ON/IDLE/OFF, room temperature and setpoint.
+    - Icons animate (flame flickers, snowflake pulses) while a zone is actively running.
+    - Auto-updates when the climate entities change.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
     - Custom "analog" face: minimal dial with accent ticks, smooth anti-aliased hands, pulsing center dot.
@@ -377,12 +382,49 @@ data:
 Because power sensors update near-continuously, updates are throttled to at
 most one upload every 15 seconds, and tiny fluctuations (< 25 W) are ignored.
 Stop with `idotmatrix.stop_power`. All display modes (GIF rotation, weather,
-Bitcoin, CO2, power) are mutually exclusive — starting one stops the others.
+Bitcoin, CO2, power, thermostat, clock) are mutually exclusive — starting one
+stops the others.
+
+If `heat_entity` / `cool_entity` point at climate entities, the "WATTS"
+caption is replaced by a flame and "HEAT ON", a snowflake and "AC ON", or
+"HEAT+AC" whenever a thermostat reports that it is actively running, so a
+load spike explains itself at a glance.
 
 | Field | Description |
 | --- | --- |
 | `power_entity` | Total active power sensor in watts. |
+| `heat_entity` | Optional heating climate entity used for the caption. |
+| `cool_entity` | Optional cooling climate entity used for the caption. |
 | `pixel_size` | `64` (default) or `32` (compact layout). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Thermostat Status
+
+`idotmatrix.show_thermostat` renders a heating thermostat and a cooling
+thermostat as two stacked panels. Each shows its icon (flame or snowflake),
+a `HEAT` / `COOL` label, a status word (`ON`, `IDLE`, `OFF`, `FAN`), the
+room temperature at double size and the setpoint beside it. While a zone is
+actively heating or cooling its icon animates; idle zones dim to a muted
+version of their color and switched-off zones go gray. Either entity may be
+omitted to show a single centered panel.
+
+```yaml
+action: idotmatrix.show_thermostat
+data:
+  heat_entity: climate.nest_learning_thermostat_4th_gen
+  cool_entity: climate.nest_thermostat
+```
+
+Reads the standard climate attributes (`hvac_action`, `current_temperature`,
+`temperature`, falling back to `target_temp_low` / `target_temp_high` in
+heat-cool mode). Updates are debounced by 5 seconds and skipped when nothing
+visible changed. Stop with `idotmatrix.stop_thermostat`.
+
+| Field | Description |
+| --- | --- |
+| `heat_entity` | Climate entity for the heating zone (top panel). |
+| `cool_entity` | Climate entity for the cooling zone (bottom panel). |
+| `pixel_size` | `64` (default) or `32` (compact icon + temperature list). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
 
 ### Clock

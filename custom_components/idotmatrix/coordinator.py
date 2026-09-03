@@ -33,6 +33,7 @@ from .weather import WeatherData, render_weather_gif, normalize_condition
 from .bitcoin import TickerData, render_bitcoin_gif
 from .co2 import CO2Data, render_co2_gif
 from .power import PowerData, render_power_gif
+from .thermostat import ThermostatData, ZoneState, render_thermostat_gif
 
 
 from homeassistant.helpers import template
@@ -130,6 +131,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._power_throttle_unsub = None
         self._power_signature: tuple | None = None
         self._power_lock = asyncio.Lock()
+
+        # Thermostat mode tracking
+        self._thermostat_cfg: dict | None = None
+        self._thermostat_unsubs: list = []
+        self._thermostat_debounce_unsub = None
+        self._thermostat_signature: tuple | None = None
+        self._thermostat_lock = asyncio.Lock()
 
         # Clock mode tracking
         self._clock_cfg: dict | None = None
@@ -887,6 +895,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
@@ -1138,6 +1147,35 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         except (ValueError, TypeError):
             return None
 
+    def _read_climate_zone(self, entity_id: str | None,
+                           kind: str) -> ZoneState | None:
+        """Read a climate entity into a ZoneState, or None if unavailable."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable", "", None):
+            return None
+        attrs = state.attributes
+
+        def num(key):
+            v = attrs.get(key)
+            try:
+                return None if v is None else float(v)
+            except (ValueError, TypeError):
+                return None
+
+        target = num("temperature")
+        if target is None:
+            # heat_cool mode exposes a range instead of a single setpoint
+            target = num("target_temp_low" if kind == "heat"
+                         else "target_temp_high")
+
+        action = attrs.get("hvac_action")
+        if not action:
+            action = "off" if state.state == "off" else "idle"
+        return ZoneState(kind=kind, current=num("current_temperature"),
+                         target=target, action=str(action))
+
     async def _get_forecast_high_low(self, entity_id: str) -> tuple:
         """Fetch today's high/low from a weather entity's forecast."""
         for forecast_type in ("daily", "hourly"):
@@ -1263,6 +1301,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         self._weather_cfg = cfg
@@ -1388,6 +1427,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         self._btc_cfg = cfg
@@ -1476,6 +1516,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         self._co2_cfg = cfg
@@ -1531,7 +1572,13 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
                 )
                 return False
 
-            data = PowerData(watts=watts)
+            heat = self._read_climate_zone(cfg.get("heat_entity"), "heat")
+            cool = self._read_climate_zone(cfg.get("cool_entity"), "cool")
+            data = PowerData(
+                watts=watts,
+                heating=bool(heat and heat.active),
+                cooling=bool(cool and cool.active),
+            )
             signature = data.signature()
             if not force and signature == self._power_signature:
                 _LOGGER.debug("Power unchanged, skipping upload")
@@ -1561,10 +1608,14 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         self._power_cfg = cfg
-        entities = [e for e in (cfg.get("power_entity"),) if e]
+        entities = [
+            e for e in (cfg.get("power_entity"), cfg.get("heat_entity"),
+                        cfg.get("cool_entity")) if e
+        ]
         if entities:
             _LOGGER.info(f"Power mode tracking entities: {entities}")
             self._power_unsubs.append(
@@ -1602,6 +1653,99 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._power_unsubs = []
         self._power_cfg = None
         self._power_signature = None
+
+    # ------------------------------------------------------------------
+    # Thermostat mode
+    # ------------------------------------------------------------------
+
+    async def async_show_thermostat(self, cfg: dict,
+                                    force: bool = False) -> bool:
+        """Render the thermostat status GIF and upload it to the device."""
+        async with self._thermostat_lock:
+            heat = self._read_climate_zone(cfg.get("heat_entity"), "heat")
+            cool = self._read_climate_zone(cfg.get("cool_entity"), "cool")
+            if heat is None and cool is None:
+                _LOGGER.warning(
+                    "Thermostat mode: no usable climate state from %s / %s",
+                    cfg.get("heat_entity"), cfg.get("cool_entity"),
+                )
+                return False
+
+            data = ThermostatData(heat=heat, cool=cool)
+            signature = data.signature()
+            if not force and signature == self._thermostat_signature:
+                _LOGGER.debug("Thermostat unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_thermostat_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._thermostat_signature = signature
+                _LOGGER.debug(
+                    f"Thermostat uploaded: {signature}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Thermostat upload failed")
+            return success
+
+    async def async_start_thermostat_mode(self, cfg: dict) -> None:
+        """Show the thermostat status and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_clock_mode()
+
+        self._thermostat_cfg = cfg
+        entities = [
+            e for e in (cfg.get("heat_entity"), cfg.get("cool_entity")) if e
+        ]
+        if entities:
+            _LOGGER.info(f"Thermostat mode tracking entities: {entities}")
+            self._thermostat_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_thermostat_state_change
+                )
+            )
+        await self.async_show_thermostat(cfg, force=True)
+
+    @callback
+    def _on_thermostat_state_change(self, event: Event) -> None:
+        # Short debounce: a setpoint change and the resulting hvac_action
+        # flip usually arrive within a second or two of each other.
+        if self._thermostat_debounce_unsub:
+            self._thermostat_debounce_unsub()
+        self._thermostat_debounce_unsub = async_call_later(
+            self.hass, 5, self._thermostat_debounced_refresh
+        )
+
+    @callback
+    def _thermostat_debounced_refresh(self, _now) -> None:
+        self._thermostat_debounce_unsub = None
+        if self._thermostat_cfg:
+            self.hass.async_create_task(
+                self.async_show_thermostat(self._thermostat_cfg)
+            )
+
+    async def async_stop_thermostat_mode(self) -> None:
+        """Stop thermostat tracking."""
+        if self._thermostat_debounce_unsub:
+            self._thermostat_debounce_unsub()
+            self._thermostat_debounce_unsub = None
+        for unsub in self._thermostat_unsubs:
+            unsub()
+        if self._thermostat_unsubs or self._thermostat_cfg:
+            _LOGGER.debug("Thermostat mode stopped")
+        self._thermostat_unsubs = []
+        self._thermostat_cfg = None
+        self._thermostat_signature = None
 
     # ------------------------------------------------------------------
     # Clock mode
@@ -1686,6 +1830,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_bitcoin_mode()
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
         await self.async_stop_clock_mode()
 
         self._clock_cfg = cfg

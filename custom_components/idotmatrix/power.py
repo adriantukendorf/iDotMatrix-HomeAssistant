@@ -7,6 +7,10 @@ through large appliances (~2 kW), furnace (~3-3.5 kW) and AC (~4-4.5 kW).
 A lightning bolt icon in the corner changes color with the load level, and
 a bright spark travels along the filled bar to suggest current flow.
 
+When a thermostat reports that the furnace or the AC is running, the
+"WATTS" caption is replaced by a flame / snowflake and "HEAT ON", "AC ON"
+or "HEAT+AC" so a load spike explains itself at a glance.
+
 Reuses the pixel font, text helpers and device-safe GIF encoder from the
 weather module.
 """
@@ -16,6 +20,7 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageDraw
 
+from .thermostat import COOL_BLUE, COOL_CORE, HEAT_CORE, HEAT_ORANGE, draw_zone_icon
 from .weather import _draw_text, _text_width, frames_to_gif
 
 GOOD_GREEN = (80, 200, 80)
@@ -68,10 +73,12 @@ def _watts_label(watts: float) -> str:
 @dataclass
 class PowerData:
     watts: float
+    heating: bool = False
+    cooling: bool = False
 
     def signature(self) -> tuple:
         # Round to 25 W so sensor jitter doesn't trigger BLE re-uploads
-        return (round(self.watts / 25),)
+        return (round(self.watts / 25), self.heating, self.cooling)
 
 
 def _draw_icon(d: ImageDraw.ImageDraw, ox: int, oy: int,
@@ -114,6 +121,27 @@ def _draw_hbar(d: ImageDraw.ImageDraw, x: int, y: int,
         d.line([(needle_x, y - 1), (needle_x, y + h)], fill=(255, 255, 255))
 
 
+def _draw_caption(d: ImageDraw.ImageDraw, data: PowerData, size: int,
+                  f: int, n: int) -> None:
+    if not (data.heating or data.cooling):
+        pw = _text_width("WATTS")
+        _draw_text(d, (size - pw) // 2, 36, "WATTS", LABEL_COLOR)
+        return
+
+    if data.heating and data.cooling:
+        text, kind, color, core = "HEAT+AC", "heat", HEAT_ORANGE, HEAT_CORE
+    elif data.heating:
+        text, kind, color, core = "HEAT ON", "heat", HEAT_ORANGE, HEAT_CORE
+    else:
+        text, kind, color, core = "AC ON", "cool", COOL_BLUE, COOL_CORE
+
+    tw = _text_width(text)
+    total = 8 + 2 + tw
+    x = (size - total) // 2
+    draw_zone_icon(d, x, 35, kind, color, core, f, n, animate=True)
+    _draw_text(d, x + 10, 36, text, color)
+
+
 def _layout_large(data: PowerData, size: int, f: int = 0,
                   n: int = 1) -> Image.Image:
     img = Image.new("RGB", (size, size), (0, 0, 0))
@@ -133,9 +161,8 @@ def _layout_large(data: PowerData, size: int, f: int = 0,
     w2 = _text_width(watts_txt, scale=2)
     _draw_text(d, (size - w2) // 2, 19, watts_txt, color, scale=2)
 
-    # Row 3 (y=36): "WATTS" label centered at scale=1
-    pw = _text_width("WATTS")
-    _draw_text(d, (size - pw) // 2, 36, "WATTS", LABEL_COLOR)
+    # Row 3 (y=36): "WATTS" caption, or the HVAC cause when a zone is running
+    _draw_caption(d, data, size, f, n)
 
     # Row 4 (y=50): Horizontal bar gauge, full width with margin
     _draw_hbar(d, 2, 50, size - 4, 7, data.watts, f, n)

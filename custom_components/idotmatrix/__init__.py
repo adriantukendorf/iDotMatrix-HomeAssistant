@@ -429,6 +429,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "power_entity",
                 "sensor.shellypro3em_0cb815fd2f44_total_active_power",
             ),
+            "heat_entity": call.data.get("heat_entity", "climate.nest_learning_thermostat_4th_gen"),
+            "cool_entity": call.data.get("cool_entity", "climate.nest_thermostat"),
             "pixel_size": call.data.get("pixel_size"),
         }
         follow = call.data.get("follow", True)
@@ -450,6 +452,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await coordinator.async_stop_power_mode()
 
     hass.services.async_register(DOMAIN, "stop_power", async_stop_power)
+
+    # Register show_thermostat service
+    async def async_show_thermostat(call):
+        """Handle the show_thermostat service call."""
+        cfg = {
+            "heat_entity": call.data.get("heat_entity", "climate.nest_learning_thermostat_4th_gen"),
+            "cool_entity": call.data.get("cool_entity", "climate.nest_thermostat"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_thermostat_mode(cfg)
+                else:
+                    await coordinator.async_show_thermostat(cfg, force=True)
+
+    hass.services.async_register(
+        DOMAIN, "show_thermostat", async_show_thermostat
+    )
+
+    # Register stop_thermostat service
+    async def async_stop_thermostat(call):
+        """Handle the stop_thermostat service call."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_thermostat_mode()
+
+    hass.services.async_register(
+        DOMAIN, "stop_thermostat", async_stop_thermostat
+    )
 
     # Register show_clock service
     async def async_show_clock(call):
@@ -499,6 +533,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_co2_mode()
         if hasattr(coordinator, "async_stop_power_mode"):
             await coordinator.async_stop_power_mode()
+        if hasattr(coordinator, "async_stop_thermostat_mode"):
+            await coordinator.async_stop_thermostat_mode()
         if hasattr(coordinator, "async_stop_clock_mode"):
             await coordinator.async_stop_clock_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):

@@ -238,6 +238,8 @@ show_power:
     Display whole-house power usage with a color-coded bar gauge scaled
     0-5000 W and a status label (Low/Norm/Med/High/Peak/Max). The gauge
     updates automatically (at most every 15s) as the power sensor changes.
+    If thermostats are given, the caption flags when the furnace or AC is
+    running so a spike explains itself.
   fields:
     power_entity:
       required: false
@@ -247,6 +249,20 @@ show_power:
       selector:
         entity:
           domain: sensor
+    heat_entity:
+      required: false
+      description: Heating thermostat; when it reports heating, the caption shows a flame and "HEAT ON".
+      default: climate.nest_learning_thermostat_4th_gen
+      selector:
+        entity:
+          domain: climate
+    cool_entity:
+      required: false
+      description: Cooling thermostat; when it reports cooling, the caption shows a snowflake and "AC ON".
+      default: climate.nest_thermostat
+      selector:
+        entity:
+          domain: climate
     pixel_size:
       required: false
       description: Display resolution. 64 renders the full gauge, 32 a compact layout.
@@ -266,6 +282,48 @@ show_power:
 stop_power:
   name: Stop power gauge
   description: Stop power gauge auto-updates.
+
+show_thermostat:
+  name: Show thermostat status
+  description: >
+    Display the heating and cooling thermostats as two stacked panels: a
+    flame or snowflake icon, ON/IDLE/OFF status, the room temperature and
+    the setpoint. Icons animate while a zone is actively running. Updates
+    automatically as the climate entities change.
+  fields:
+    heat_entity:
+      required: false
+      description: Climate entity for the heating zone (top panel).
+      default: climate.nest_learning_thermostat_4th_gen
+      selector:
+        entity:
+          domain: climate
+    cool_entity:
+      required: false
+      description: Climate entity for the cooling zone (bottom panel).
+      default: climate.nest_thermostat
+      selector:
+        entity:
+          domain: climate
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders both panels in full, 32 a compact icon + temperature list.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the thermostats change (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_thermostat:
+  name: Stop thermostat status
+  description: Stop thermostat status auto-updates.
 
 show_clock:
   name: Show clock
