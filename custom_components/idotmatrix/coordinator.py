@@ -34,10 +34,12 @@ from .bitcoin import TickerData, render_bitcoin_gif
 from .co2 import CO2Data, render_co2_gif
 from .power import PowerData, render_power_gif
 from .thermostat import ThermostatData, ZoneState, render_thermostat_gif
+from .sun import SunData, render_sun_gif
 
 
 from homeassistant.helpers import template
 from homeassistant.util import dt as dt_util
+from homeassistant.helpers.sun import get_astral_event_date
 
 import os
 import tempfile
@@ -131,6 +133,12 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._power_throttle_unsub = None
         self._power_signature: tuple | None = None
         self._power_lock = asyncio.Lock()
+
+        # Sun arc mode tracking
+        self._sun_cfg: dict | None = None
+        self._sun_unsub = None
+        self._sun_signature: tuple | None = None
+        self._sun_lock = asyncio.Lock()
 
         # Thermostat mode tracking
         self._thermostat_cfg: dict | None = None
@@ -896,6 +904,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         screen_size = int(self.text_settings.get("screen_size", 32))
@@ -1302,6 +1311,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._weather_cfg = cfg
@@ -1428,6 +1438,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._btc_cfg = cfg
@@ -1517,6 +1528,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._co2_cfg = cfg
@@ -1609,6 +1621,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._power_cfg = cfg
@@ -1701,6 +1714,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._thermostat_cfg = cfg
@@ -1746,6 +1760,132 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._thermostat_unsubs = []
         self._thermostat_cfg = None
         self._thermostat_signature = None
+
+    # ------------------------------------------------------------------
+    # Sun arc mode
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fmt_clock(dt, hour24: bool) -> str:
+        dt = dt_util.as_local(dt)
+        if hour24:
+            return f"{dt.hour}:{dt.minute:02d}"
+        h = dt.hour % 12 or 12
+        return f"{h}:{dt.minute:02d}"
+
+    @staticmethod
+    def _fmt_span(delta) -> str:
+        mins = max(0, int(delta.total_seconds() // 60))
+        h, m = divmod(mins, 60)
+        return f"{h}H{m:02d}M" if h else f"{m}M"
+
+    def _build_sun_data(self, cfg: dict) -> SunData | None:
+        """Work out where we are between sunrise and sunset right now."""
+        now = dt_util.now()
+        today = now.date()
+        rise = get_astral_event_date(self.hass, "sunrise", today)
+        sset = get_astral_event_date(self.hass, "sunset", today)
+        if rise is None or sset is None:
+            return None
+        rise, sset = dt_util.as_local(rise), dt_util.as_local(sset)
+        hour24 = bool(cfg.get("hour24", True))
+
+        if rise <= now < sset:
+            is_day, start, end = True, rise, sset
+            countdown = "SET " + self._fmt_span(sset - now)
+            show_rise, show_set = rise, sset
+        elif now < rise:
+            prev_set = get_astral_event_date(
+                self.hass, "sunset", today - timedelta(days=1))
+            is_day, start, end = False, dt_util.as_local(prev_set), rise
+            countdown = "RISE " + self._fmt_span(rise - now)
+            show_rise, show_set = rise, sset
+        else:
+            next_rise = get_astral_event_date(
+                self.hass, "sunrise", today + timedelta(days=1))
+            is_day, start, end = False, sset, dt_util.as_local(next_rise)
+            countdown = "RISE " + self._fmt_span(end - now)
+            show_rise, show_set = end, sset
+
+        span = (end - start).total_seconds()
+        progress = 0.0 if span <= 0 else (now - start).total_seconds() / span
+        progress = max(0.0, min(1.0, progress))
+
+        return SunData(
+            is_day=is_day,
+            progress=progress,
+            rise_txt=self._fmt_clock(show_rise, hour24),
+            set_txt=self._fmt_clock(show_set, hour24),
+            countdown_txt=countdown,
+            daylight_txt="DAY " + self._fmt_span(sset - rise),
+        )
+
+    async def async_show_sun(self, cfg: dict, force: bool = False) -> bool:
+        """Render the sun arc GIF and upload it to the device."""
+        async with self._sun_lock:
+            data = self._build_sun_data(cfg)
+            if data is None:
+                _LOGGER.warning(
+                    "Sun mode: no sunrise/sunset available (check the "
+                    "home location in Home Assistant)"
+                )
+                return False
+
+            signature = data.signature()
+            if not force and signature == self._sun_signature:
+                _LOGGER.debug("Sun arc unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_sun_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._sun_signature = signature
+                _LOGGER.debug(
+                    f"Sun arc uploaded: {data.countdown_txt}, "
+                    f"progress {data.progress:.2f}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Sun arc upload failed")
+            return success
+
+    async def async_start_sun_mode(self, cfg: dict) -> None:
+        """Show the sun arc and keep it updated every minute."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_clock_mode()
+
+        self._sun_cfg = cfg
+        # The countdown ticks once a minute; the signature check skips the
+        # upload whenever nothing visible has changed.
+        self._sun_unsub = async_track_time_change(
+            self.hass, self._on_sun_minute, second=0
+        )
+        await self.async_show_sun(cfg, force=True)
+
+    @callback
+    def _on_sun_minute(self, _now) -> None:
+        if self._sun_cfg:
+            self.hass.async_create_task(self.async_show_sun(self._sun_cfg))
+
+    async def async_stop_sun_mode(self) -> None:
+        """Stop sun arc tracking."""
+        if self._sun_unsub:
+            self._sun_unsub()
+            self._sun_unsub = None
+        if self._sun_cfg:
+            _LOGGER.debug("Sun mode stopped")
+        self._sun_cfg = None
+        self._sun_signature = None
 
     # ------------------------------------------------------------------
     # Clock mode
@@ -1831,6 +1971,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_co2_mode()
         await self.async_stop_power_mode()
         await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
         await self.async_stop_clock_mode()
 
         self._clock_cfg = cfg

@@ -325,6 +325,40 @@ stop_thermostat:
   name: Stop thermostat status
   description: Stop thermostat status auto-updates.
 
+show_sun:
+  name: Show sunrise / sunset arc
+  description: >
+    Display a horizon with the sun travelling an arc from sunrise to
+    sunset (the moon takes the arc at night). Shows sunrise and sunset
+    times, daylight length and a countdown to the next event. Uses the
+    home location configured in Home Assistant; refreshes every minute.
+  fields:
+    hour24:
+      required: false
+      description: Show sunrise/sunset times in 24-hour format (default true).
+      default: true
+      selector:
+        boolean:
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full layout, 32 a compact arc with the next event time.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_sun:
+  name: Stop sunrise / sunset arc
+  description: Stop sun arc auto-updates.
+
 show_clock:
   name: Show clock
   description: >

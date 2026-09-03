@@ -52,6 +52,10 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Heating and cooling zones as two stacked panels: flame / snowflake icon, ON/IDLE/OFF, room temperature and setpoint.
     - Icons animate (flame flickers, snowflake pulses) while a zone is actively running.
     - Auto-updates when the climate entities change.
+- **Sunrise / Sunset Arc**:
+    - Horizon with the sun travelling an arc from sunrise to sunset; the moon takes the arc at night.
+    - Sunrise and sunset times, daylight length, and a countdown to the next event.
+    - Uses the home location from Home Assistant; refreshes every minute.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
     - Custom "analog" face: minimal dial with accent ticks, smooth anti-aliased hands, pulsing center dot.
@@ -425,6 +429,33 @@ visible changed. Stop with `idotmatrix.stop_thermostat`.
 | `heat_entity` | Climate entity for the heating zone (top panel). |
 | `cool_entity` | Climate entity for the cooling zone (bottom panel). |
 | `pixel_size` | `64` (default) or `32` (compact icon + temperature list). |
+| `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Sunrise / Sunset Arc
+
+`idotmatrix.show_sun` draws a horizon line with an arc across the sky.
+During the day the sun travels the arc from sunrise (left) to sunset
+(right): the path already travelled glows warm, the rest is a dim dotted
+trail, and the sun's color warms toward orange as it nears the horizon.
+At night the moon takes the same arc from sunset to the next sunrise on a
+blue trail with a few twinkling stars. Sunrise and sunset times sit under
+the ends of the horizon, the daylight length runs along the top, and a
+countdown to the next event ("SET 4H12M" / "RISE 9H05M") along the bottom.
+
+```yaml
+action: idotmatrix.show_sun
+data:
+  hour24: false
+```
+
+Times come from the home location configured in Home Assistant, so no
+entity is needed. The display refreshes each minute and skips the upload
+when nothing visible changed. Stop with `idotmatrix.stop_sun`.
+
+| Field | Description |
+| --- | --- |
+| `hour24` | `true` (default) for 24-hour times, `false` for 12-hour. |
+| `pixel_size` | `64` (default) or `32` (compact arc with the next event time). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
 
 ### Clock
