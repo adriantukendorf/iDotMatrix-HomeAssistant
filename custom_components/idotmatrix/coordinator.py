@@ -36,6 +36,7 @@ from .power import PowerData, render_power_gif
 from .thermostat import ThermostatData, ZoneState, render_thermostat_gif
 from .sun import SunData, render_sun_gif
 from .moon import MoonData, moon_age, render_moon_gif
+from .message import MessageSpec, render_message_gif
 
 
 from homeassistant.helpers import template
@@ -146,6 +147,14 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._moon_unsub = None
         self._moon_signature: tuple | None = None
         self._moon_lock = asyncio.Lock()
+
+        # One-shot message tracking (restores the previous mode afterwards)
+        self._message_cfg: dict | None = None
+        self._message_prev: tuple | None = None
+        self._message_unsub = None
+        self._message_woke_screen = False
+        self._message_lock = asyncio.Lock()
+        self._gif_cfg: dict | None = None
 
         # Thermostat mode tracking
         self._thermostat_cfg: dict | None = None
@@ -914,6 +923,9 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._gif_cfg = {"path": path, "rotation_interval": rotation_interval}
 
         screen_size = int(self.text_settings.get("screen_size", 32))
         # Clamp interval to uint8 range
@@ -1138,6 +1150,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
 
     async def async_stop_gif_rotation(self) -> None:
         """Stop the current GIF rotation if running."""
+        self._gif_cfg = None
         if self._gif_rotation_task is not None:
             self._gif_rotation_stop.set()
             self._gif_rotation_task.cancel()
@@ -1322,6 +1335,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._weather_cfg = cfg
         entities = [
@@ -1450,6 +1464,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._btc_cfg = cfg
         entities = [
@@ -1541,6 +1556,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._co2_cfg = cfg
         entities = [e for e in (cfg.get("co2_entity"),) if e]
@@ -1635,6 +1651,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._power_cfg = cfg
         entities = [
@@ -1729,6 +1746,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._thermostat_cfg = cfg
         entities = [
@@ -1877,6 +1895,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._sun_cfg = cfg
         # The countdown ticks once a minute; the signature check skips the
@@ -1943,6 +1962,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._moon_cfg = cfg
         # The phase moves ~3% per day; an hourly check with the signature
@@ -1966,6 +1986,149 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Moon mode stopped")
         self._moon_cfg = None
         self._moon_signature = None
+
+    # ------------------------------------------------------------------
+    # One-shot messages
+    # ------------------------------------------------------------------
+
+    def _snapshot_mode(self) -> tuple | None:
+        """Capture whichever display mode is active so it can be restored."""
+        for name, cfg in (
+            ("weather", self._weather_cfg),
+            ("bitcoin", self._btc_cfg),
+            ("co2", self._co2_cfg),
+            ("power", self._power_cfg),
+            ("thermostat", self._thermostat_cfg),
+            ("sun", self._sun_cfg),
+            ("moon", self._moon_cfg),
+            ("clock", self._clock_cfg),
+            ("gif", self._gif_cfg),
+        ):
+            if cfg:
+                return name, dict(cfg)
+        return None
+
+    async def _restore_mode(self, snapshot: tuple) -> None:
+        name, cfg = snapshot
+        _LOGGER.debug(f"Message finished, restoring {name} mode")
+        starters = {
+            "weather": self.async_start_weather_mode,
+            "bitcoin": self.async_start_bitcoin_mode,
+            "co2": self.async_start_co2_mode,
+            "power": self.async_start_power_mode,
+            "thermostat": self.async_start_thermostat_mode,
+            "sun": self.async_start_sun_mode,
+            "moon": self.async_start_moon_mode,
+            "clock": self.async_start_clock_mode,
+        }
+        if name == "gif":
+            await self.async_display_gif(**cfg)
+        elif name in starters:
+            await starters[name](cfg)
+
+    async def _stop_modes_for_message(self) -> None:
+        """Stop every display mode except the message itself."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+
+    async def async_show_message(self, cfg: dict) -> bool:
+        """Show a one-shot message, then restore the previous display."""
+        async with self._message_lock:
+            # A message interrupting another message keeps the original
+            # snapshot so we restore what was on before the first one.
+            prev = self._message_prev if self._message_cfg \
+                else self._snapshot_mode()
+            woke = self._message_woke_screen if self._message_cfg else False
+            if self._message_unsub:
+                self._message_unsub()
+                self._message_unsub = None
+            self._message_cfg = None
+            self._message_prev = None
+
+            await self._stop_modes_for_message()
+
+            spec = MessageSpec(
+                text=str(cfg.get("message") or ""),
+                style=cfg.get("style") or "card",
+                icon=cfg.get("icon") or None,
+                color=cfg.get("color"),
+                rainbow=bool(cfg.get("rainbow", False)),
+                font=cfg.get("font") or "pixel",
+            )
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_message_gif, spec, size
+            )
+
+            if not self.text_settings.get("is_on", True):
+                # Wake a darkened panel so the message is actually seen
+                try:
+                    async with self._device_lock:
+                        await Common().screenOn()
+                    self.text_settings["is_on"] = True
+                    woke = True
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(f"Could not wake screen for message: {err}")
+
+            success = await self._upload_single(gif_bytes)
+            if not success:
+                _LOGGER.error("Message upload failed")
+                if prev:
+                    await self._restore_mode(prev)
+                return False
+
+            self._message_cfg = cfg
+            self._message_prev = prev
+            self._message_woke_screen = woke
+            duration = float(cfg.get("duration", 15) or 0)
+            _LOGGER.debug(
+                f"Message shown ({spec.style}, {len(gif_bytes)} bytes), "
+                f"restore in {duration:.0f}s: {prev[0] if prev else 'nothing'}"
+            )
+            if duration > 0:
+                self._message_unsub = async_call_later(
+                    self.hass, duration, self._on_message_expired
+                )
+            return True
+
+    @callback
+    def _on_message_expired(self, _now) -> None:
+        self._message_unsub = None
+        self.hass.async_create_task(self.async_end_message())
+
+    async def async_end_message(self) -> None:
+        """End the current message and bring back what was showing."""
+        if not self._message_cfg:
+            return
+        prev, woke = self._message_prev, self._message_woke_screen
+        await self.async_stop_message_mode()
+        if prev:
+            await self._restore_mode(prev)
+        if woke:
+            try:
+                async with self._device_lock:
+                    await Common().screenOff()
+                self.text_settings["is_on"] = False
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(f"Could not darken screen after message: {err}")
+
+    async def async_stop_message_mode(self) -> None:
+        """Forget the current message without restoring anything."""
+        if self._message_unsub:
+            self._message_unsub()
+            self._message_unsub = None
+        if self._message_cfg:
+            _LOGGER.debug("Message mode stopped")
+        self._message_cfg = None
+        self._message_prev = None
+        self._message_woke_screen = False
 
     # ------------------------------------------------------------------
     # Clock mode
@@ -2054,6 +2217,7 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         await self.async_stop_sun_mode()
         await self.async_stop_moon_mode()
         await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
 
         self._clock_cfg = cfg
         if cfg.get("face", "pixel") in ("pixel", "analog"):

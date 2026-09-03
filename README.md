@@ -60,6 +60,10 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Large moon disc with the real terminator curve, maria texture, and twinkling stars.
     - Phase name, illuminated percentage, and days until the next full or new moon.
     - Computed from the date, no entity needed; refreshes hourly.
+- **Messages**:
+    - One-shot notifications from any automation in five styles: card, alert, marquee, party, typewriter.
+    - 24 built-in icons, solid or rainbow text, house pixel font or Press Start 2P arcade font.
+    - Restores whatever was showing before when the message expires; wakes a darkened panel.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
     - Custom "analog" face: minimal dial with accent ticks, smooth anti-aliased hands, pulsing center dot.
@@ -485,6 +489,48 @@ and uploads only when a visible value changes. Stop with
 | --- | --- |
 | `pixel_size` | `64` (default) or `32` (compact disc with the illumination). |
 | `follow` | `true` (default) keeps it updated; `false` renders once. |
+
+### Messages
+
+`idotmatrix.show_message` pushes a one-shot message to the panel from any
+automation. When the duration elapses, whatever was showing before comes
+back on its own (a Photos carousel is re-uploaded, so expect a delay there).
+If the panel was darkened, it is woken for the message and darkened again
+afterwards. Calling it again while a message is showing replaces the message
+but still restores the original display at the end.
+
+```yaml
+action: idotmatrix.show_message
+data:
+  message: Front door open
+  icon: door
+  style: card
+  duration: 15
+```
+
+Styles:
+
+| Style | Look |
+| --- | --- |
+| `card` | Icon on top, word-wrapped centered text below. Long text pages every 3 seconds with page dots. |
+| `alert` | The card with a pulsing border in the icon's color and a blinking icon. |
+| `marquee` | Ticker: the icon is pinned on the left and the text scrolls past it. |
+| `party` | Homage to the original Fun Text: one word at a time, each in a random color, confetti everywhere. |
+| `typewriter` | Characters appear one by one behind a blinking block cursor, phosphor green by default. |
+
+| Field | Description |
+| --- | --- |
+| `message` | Text to show. Newlines force line breaks. |
+| `style` | One of the styles above (default `card`). |
+| `icon` | Optional icon: `info`, `alert`, `check`, `cross`, `bell`, `heart`, `star`, `mail`, `door`, `package`, `drop`, `flame`, `snowflake`, `sun`, `moon`, `bolt`, `dog`, `car`, `timer`, `phone`, `home`, `gift`, `coffee`, `music`. |
+| `color` | RGB text color. Defaults to white, or phosphor green for `typewriter`. |
+| `rainbow` | Animated rainbow text. |
+| `font` | `pixel` (5x7 house font) or `arcade` (Press Start 2P, 8x8, with lowercase). |
+| `duration` | Seconds before the previous display is restored (default 15; `0` holds until `stop_message`). |
+| `pixel_size` | `64` (default) or `32` (compact card; marquee still scrolls). |
+
+`idotmatrix.stop_message` ends a message early and restores the previous
+display.
 
 ### Clock
 

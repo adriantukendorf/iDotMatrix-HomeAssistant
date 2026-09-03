@@ -388,6 +388,113 @@ stop_moon:
   name: Stop moon phase
   description: Stop moon phase auto-updates.
 
+show_message:
+  name: Show message
+  description: >
+    Push a one-shot message to the panel from any automation. Pick a style
+    (card, alert, marquee, party, typewriter), an optional icon, a color or
+    rainbow text, and the house pixel font or the Press Start 2P arcade
+    font. When the duration elapses the display that was showing before
+    (weather, moon, photos, ...) comes back on its own. A darkened panel
+    is woken for the message and darkened again afterwards.
+  fields:
+    message:
+      required: true
+      description: The text to show. Use a newline to force a line break.
+      example: Front door open
+      selector:
+        text:
+          multiline: true
+    style:
+      required: false
+      description: >
+        card = icon + wrapped text (long text pages every 3s);
+        alert = card with pulsing border and blinking icon;
+        marquee = ticker scrolling past a pinned icon;
+        party = one word at a time in random colors with confetti;
+        typewriter = characters appear behind a blinking cursor.
+      default: card
+      selector:
+        select:
+          options:
+            - card
+            - alert
+            - marquee
+            - party
+            - typewriter
+    icon:
+      required: false
+      description: Optional 16x16 icon.
+      selector:
+        select:
+          options:
+            - alert
+            - bell
+            - bolt
+            - car
+            - check
+            - coffee
+            - cross
+            - dog
+            - door
+            - drop
+            - flame
+            - gift
+            - heart
+            - home
+            - info
+            - mail
+            - moon
+            - music
+            - package
+            - phone
+            - snowflake
+            - star
+            - sun
+            - timer
+    color:
+      required: false
+      description: Text color. Defaults to white (phosphor green for typewriter).
+      selector:
+        color_rgb:
+    rainbow:
+      required: false
+      description: Animated rainbow text instead of a single color.
+      default: false
+      selector:
+        boolean:
+    font:
+      required: false
+      description: pixel = the 5x7 house font; arcade = Press Start 2P (8x8, has lowercase).
+      default: pixel
+      selector:
+        select:
+          options:
+            - pixel
+            - arcade
+    duration:
+      required: false
+      description: Seconds to show the message before restoring the previous display. 0 keeps it until stop_message.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full styles, 32 a compact card.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+
+stop_message:
+  name: Stop message
+  description: End the current message early and restore the previous display.
+
 show_clock:
   name: Show clock
   description: >

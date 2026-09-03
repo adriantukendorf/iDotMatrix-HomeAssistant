@@ -536,6 +536,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "stop_moon", async_stop_moon)
 
+    # Register show_message service
+    async def async_show_message(call):
+        """Handle the show_message service call."""
+        cfg = {
+            "message": call.data.get("message", ""),
+            "style": call.data.get("style", "card"),
+            "icon": call.data.get("icon"),
+            "color": call.data.get("color"),
+            "rainbow": call.data.get("rainbow", False),
+            "font": call.data.get("font", "pixel"),
+            "duration": call.data.get("duration", 15),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        if not str(cfg["message"]).strip():
+            _LOGGER.error("show_message service requires 'message'")
+            return
+
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_show_message(cfg)
+
+    hass.services.async_register(DOMAIN, "show_message", async_show_message)
+
+    # Register stop_message service
+    async def async_stop_message(call):
+        """Handle the stop_message service call: end early and restore."""
+        for entry_id, coordinator in hass.data[DOMAIN].items():
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_end_message()
+
+    hass.services.async_register(DOMAIN, "stop_message", async_stop_message)
+
     # Register show_clock service
     async def async_show_clock(call):
         """Handle the show_clock service call."""
@@ -590,6 +622,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_stop_sun_mode()
         if hasattr(coordinator, "async_stop_moon_mode"):
             await coordinator.async_stop_moon_mode()
+        if hasattr(coordinator, "async_stop_message_mode"):
+            await coordinator.async_stop_message_mode()
         if hasattr(coordinator, "async_stop_clock_mode"):
             await coordinator.async_stop_clock_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
