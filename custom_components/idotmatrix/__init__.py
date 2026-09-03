@@ -144,7 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # We'll just apply to all loaded coordinators for now or pass 'device_id'.
         # Let's assume the user has one device for now or we iterate.
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_set_face_config(face_config)
 
@@ -162,7 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Find first coordinator
         coordinator = None
-        for entry_id, c in hass.data[DOMAIN].items():
+        for c in list(hass.data[DOMAIN].values()):
             if isinstance(c, IDotMatrixCoordinator):
                 coordinator = c
                 break
@@ -289,7 +289,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         face_config = {"layers": design["layers"]}
         
         # Apply to all coordinators (similar logic to set_face)
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_set_face_config(face_config)
 
@@ -306,7 +306,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         # Apply to all coordinators
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_display_gif(
                     path=path,
@@ -318,7 +318,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_gif_rotation service
     async def async_stop_gif_rotation(call):
         """Handle the stop_gif_rotation service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_gif_rotation()
 
@@ -348,7 +348,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_weather_mode(cfg)
@@ -360,7 +360,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_weather service
     async def async_stop_weather(call):
         """Handle the stop_weather service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_weather_mode()
 
@@ -376,7 +376,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_bitcoin_mode(cfg)
@@ -388,7 +388,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_bitcoin service
     async def async_stop_bitcoin(call):
         """Handle the stop_bitcoin service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_bitcoin_mode()
 
@@ -403,7 +403,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_co2_mode(cfg)
@@ -415,7 +415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_co2 service
     async def async_stop_co2(call):
         """Handle the stop_co2 service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_co2_mode()
 
@@ -435,7 +435,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_power_mode(cfg)
@@ -447,7 +447,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_power service
     async def async_stop_power(call):
         """Handle the stop_power service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_power_mode()
 
@@ -463,7 +463,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_thermostat_mode(cfg)
@@ -477,7 +477,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_thermostat service
     async def async_stop_thermostat(call):
         """Handle the stop_thermostat service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_thermostat_mode()
 
@@ -494,7 +494,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_sun_mode(cfg)
@@ -506,7 +506,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_sun service
     async def async_stop_sun(call):
         """Handle the stop_sun service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_sun_mode()
 
@@ -518,7 +518,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         cfg = {"pixel_size": call.data.get("pixel_size")}
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_moon_mode(cfg)
@@ -530,7 +530,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_moon service
     async def async_stop_moon(call):
         """Handle the stop_moon service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_moon_mode()
 
@@ -553,7 +553,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("show_message service requires 'message'")
             return
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_show_message(cfg)
 
@@ -562,7 +562,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_message service
     async def async_stop_message(call):
         """Handle the stop_message service call: end early and restore."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_end_message()
 
@@ -580,7 +580,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
         follow = call.data.get("follow", True)
 
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 if follow:
                     await coordinator.async_start_clock_mode(cfg)
@@ -592,7 +592,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register stop_clock service
     async def async_stop_clock(call):
         """Handle the stop_clock service call."""
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_stop_clock_mode()
 
