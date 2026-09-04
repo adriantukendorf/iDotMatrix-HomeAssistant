@@ -62,7 +62,7 @@ Connects directly to your device via Bluetooth (native or proxy) without any clo
     - Computed from the date, no entity needed; refreshes hourly.
 - **Messages**:
     - One-shot notifications from any automation in five styles: card, alert, marquee, party, typewriter.
-    - 24 built-in icons, solid or rainbow text, house pixel font or Press Start 2P arcade font.
+    - 24 built-in icons, solid or rainbow text, three fonts: house 5x7 pixel, Press Start 2P arcade, minimalist 3x5 tiny.
     - Restores whatever was showing before when the message expires; wakes a darkened panel.
 - **Clock**:
     - Custom "pixel" face in the house style: big HH:MM with blinking colon, weekday, date, accent rule.
@@ -516,7 +516,7 @@ Styles:
 | `alert` | The card with a pulsing border in the icon's color and a blinking icon. |
 | `marquee` | Ticker: the icon is pinned on the left and the text scrolls past it. |
 | `party` | Homage to the original Fun Text: one word at a time, each in a random color, confetti everywhere. |
-| `typewriter` | Characters appear one by one behind a blinking block cursor, phosphor green by default. |
+| `typewriter` | Characters appear one by one behind a blinking block cursor, phosphor green by default. Long text types out page by page. |
 
 | Field | Description |
 | --- | --- |
@@ -525,7 +525,7 @@ Styles:
 | `icon` | Optional icon: `info`, `alert`, `check`, `cross`, `bell`, `heart`, `star`, `mail`, `door`, `package`, `drop`, `flame`, `snowflake`, `sun`, `moon`, `bolt`, `dog`, `car`, `timer`, `phone`, `home`, `gift`, `coffee`, `music`. |
 | `color` | RGB text color. Defaults to white, or phosphor green for `typewriter`. |
 | `rainbow` | Animated rainbow text. |
-| `font` | `pixel` (5x7 house font) or `arcade` (Press Start 2P, 8x8, with lowercase). |
+| `font` | `pixel` (5x7 house font), `arcade` (Press Start 2P, 8x8, with lowercase) or `tiny` (3x5 minimalist, 15 characters per line for dense messages). |
 | `duration` | Seconds before the previous display is restored (default 15; `0` holds until `stop_message`). |
 | `pixel_size` | `64` (default) or `32` (compact card; marquee still scrolls). |
 

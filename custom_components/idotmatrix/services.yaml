@@ -465,13 +465,14 @@ show_message:
         boolean:
     font:
       required: false
-      description: pixel = the 5x7 house font; arcade = Press Start 2P (8x8, has lowercase).
+      description: pixel = the 5x7 house font; arcade = Press Start 2P (8x8, has lowercase); tiny = minimalist 3x5 that fits 15 characters per line.
       default: pixel
       selector:
         select:
           options:
             - pixel
             - arcade
+            - tiny
     duration:
       required: false
       description: Seconds to show the message before restoring the previous display. 0 keeps it until stop_message.
