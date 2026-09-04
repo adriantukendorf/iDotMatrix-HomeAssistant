@@ -42,7 +42,14 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
         # Lovelace not loaded
         return
 
-    resources = lovelace_data.get("resources")
+    # Handle both old dict-style and new LovelaceData object
+    if hasattr(lovelace_data, "resources"):
+        resources = lovelace_data.resources
+    elif isinstance(lovelace_data, dict):
+        resources = lovelace_data.get("resources")
+    else:
+        return
+
     if not resources or not hasattr(resources, "async_create_item"):
         # Likely YAML mode
         return
@@ -51,15 +58,18 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
         await resources.async_load()
         resources.loaded = True
 
-    # Get version from manifest
-    try:
-        import json
-        manifest_path = os.path.join(os.path.dirname(__file__), "manifest.json")
-        with open(manifest_path, 'r') as f:
-            manifest = json.load(f)
-            version = manifest.get("version", "0.0.0")
-    except Exception:
-        version = "0.0.0"
+    # Get version from manifest (use executor to avoid blocking)
+    def _read_manifest_version():
+        try:
+            import json
+            manifest_path = os.path.join(os.path.dirname(__file__), "manifest.json")
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+                return manifest.get("version", "0.0.0")
+        except Exception:
+            return "0.0.0"
+
+    version = await hass.async_add_executor_job(_read_manifest_version)
 
     # Append version to URL for cache busting
     card_url = f"{_CARD_RESOURCE_URL}?v={version}"
@@ -113,13 +123,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Automatically register the Lovelace card resource (storage mode only).
+    async def _on_homeassistant_started(event):
+        """Handle Home Assistant started event."""
+        await _async_register_lovelace_resource(hass)
+
     if hass.is_running:
-        hass.async_create_task(_async_register_lovelace_resource(hass))
+        await _async_register_lovelace_resource(hass)
     else:
-        hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED,
-            lambda event: hass.async_create_task(_async_register_lovelace_resource(hass)),
-        )
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_homeassistant_started)
 
     async def async_set_face(call):
         """Handle the set_face service call."""
@@ -133,7 +144,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # We'll just apply to all loaded coordinators for now or pass 'device_id'.
         # Let's assume the user has one device for now or we iterate.
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_set_face_config(face_config)
 
@@ -151,7 +162,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Find first coordinator
         coordinator = None
-        for entry_id, c in hass.data[DOMAIN].items():
+        for c in list(hass.data[DOMAIN].values()):
             if isinstance(c, IDotMatrixCoordinator):
                 coordinator = c
                 break
@@ -278,19 +289,343 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         face_config = {"layers": design["layers"]}
         
         # Apply to all coordinators (similar logic to set_face)
-        for entry_id, coordinator in hass.data[DOMAIN].items():
+        for coordinator in list(hass.data[DOMAIN].values()):
             if isinstance(coordinator, IDotMatrixCoordinator):
                 await coordinator.async_set_face_config(face_config)
 
     hass.services.async_register(DOMAIN, "set_saved_design", async_set_saved_design)
+
+    # Register display_gif service
+    async def async_display_gif(call):
+        """Handle the display_gif service call."""
+        path = call.data.get("path")
+        rotation_interval = call.data.get("rotation_interval", 5)
+
+        if not path:
+            _LOGGER.error("display_gif service requires 'path' parameter")
+            return
+
+        # Apply to all coordinators
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_display_gif(
+                    path=path,
+                    rotation_interval=rotation_interval,
+                )
+
+    hass.services.async_register(DOMAIN, "display_gif", async_display_gif)
+
+    # Register stop_gif_rotation service
+    async def async_stop_gif_rotation(call):
+        """Handle the stop_gif_rotation service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_gif_rotation()
+
+    hass.services.async_register(DOMAIN, "stop_gif_rotation", async_stop_gif_rotation)
+
+    # Register show_weather service
+    async def async_show_weather(call):
+        """Handle the show_weather service call."""
+        cfg = {
+            "weather_entity": call.data.get("weather_entity", "weather.openweathermap"),
+            "condition_entity": call.data.get("condition_entity"),
+            "temperature_entity": call.data.get("temperature_entity"),
+            "humidity_entity": call.data.get("humidity_entity"),
+            "wind_entity": call.data.get("wind_entity"),
+            "high_entity": call.data.get("high_entity"),
+            "low_entity": call.data.get("low_entity"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        if not any(
+            cfg.get(k) for k in ("weather_entity", "condition_entity", "temperature_entity")
+        ):
+            _LOGGER.error(
+                "show_weather requires at least one of: weather_entity, "
+                "condition_entity, temperature_entity"
+            )
+            return
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_weather_mode(cfg)
+                else:
+                    await coordinator.async_show_weather(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_weather", async_show_weather)
+
+    # Register stop_weather service
+    async def async_stop_weather(call):
+        """Handle the stop_weather service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_weather_mode()
+
+    hass.services.async_register(DOMAIN, "stop_weather", async_stop_weather)
+
+    # Register show_bitcoin service
+    async def async_show_bitcoin(call):
+        """Handle the show_bitcoin service call."""
+        cfg = {
+            "price_entity": call.data.get("price_entity", "sensor.bitcoin_price"),
+            "change_entity": call.data.get("change_entity"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_bitcoin_mode(cfg)
+                else:
+                    await coordinator.async_show_bitcoin(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_bitcoin", async_show_bitcoin)
+
+    # Register stop_bitcoin service
+    async def async_stop_bitcoin(call):
+        """Handle the stop_bitcoin service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_bitcoin_mode()
+
+    hass.services.async_register(DOMAIN, "stop_bitcoin", async_stop_bitcoin)
+
+    # Register show_co2 service
+    async def async_show_co2(call):
+        """Handle the show_co2 service call."""
+        cfg = {
+            "co2_entity": call.data.get("co2_entity", "sensor.aranet4_19d46_carbon_dioxide"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_co2_mode(cfg)
+                else:
+                    await coordinator.async_show_co2(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_co2", async_show_co2)
+
+    # Register stop_co2 service
+    async def async_stop_co2(call):
+        """Handle the stop_co2 service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_co2_mode()
+
+    hass.services.async_register(DOMAIN, "stop_co2", async_stop_co2)
+
+    # Register show_power service
+    async def async_show_power(call):
+        """Handle the show_power service call."""
+        cfg = {
+            "power_entity": call.data.get(
+                "power_entity",
+                "sensor.shellypro3em_0cb815fd2f44_total_active_power",
+            ),
+            "heat_entity": call.data.get("heat_entity", "climate.nest_learning_thermostat_4th_gen"),
+            "cool_entity": call.data.get("cool_entity", "climate.nest_thermostat"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_power_mode(cfg)
+                else:
+                    await coordinator.async_show_power(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_power", async_show_power)
+
+    # Register stop_power service
+    async def async_stop_power(call):
+        """Handle the stop_power service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_power_mode()
+
+    hass.services.async_register(DOMAIN, "stop_power", async_stop_power)
+
+    # Register show_thermostat service
+    async def async_show_thermostat(call):
+        """Handle the show_thermostat service call."""
+        cfg = {
+            "heat_entity": call.data.get("heat_entity", "climate.nest_learning_thermostat_4th_gen"),
+            "cool_entity": call.data.get("cool_entity", "climate.nest_thermostat"),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_thermostat_mode(cfg)
+                else:
+                    await coordinator.async_show_thermostat(cfg, force=True)
+
+    hass.services.async_register(
+        DOMAIN, "show_thermostat", async_show_thermostat
+    )
+
+    # Register stop_thermostat service
+    async def async_stop_thermostat(call):
+        """Handle the stop_thermostat service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_thermostat_mode()
+
+    hass.services.async_register(
+        DOMAIN, "stop_thermostat", async_stop_thermostat
+    )
+
+    # Register show_sun service
+    async def async_show_sun(call):
+        """Handle the show_sun service call."""
+        cfg = {
+            "hour24": call.data.get("hour24", True),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_sun_mode(cfg)
+                else:
+                    await coordinator.async_show_sun(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_sun", async_show_sun)
+
+    # Register stop_sun service
+    async def async_stop_sun(call):
+        """Handle the stop_sun service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_sun_mode()
+
+    hass.services.async_register(DOMAIN, "stop_sun", async_stop_sun)
+
+    # Register show_moon service
+    async def async_show_moon(call):
+        """Handle the show_moon service call."""
+        cfg = {"pixel_size": call.data.get("pixel_size")}
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_moon_mode(cfg)
+                else:
+                    await coordinator.async_show_moon(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_moon", async_show_moon)
+
+    # Register stop_moon service
+    async def async_stop_moon(call):
+        """Handle the stop_moon service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_moon_mode()
+
+    hass.services.async_register(DOMAIN, "stop_moon", async_stop_moon)
+
+    # Register show_message service
+    async def async_show_message(call):
+        """Handle the show_message service call."""
+        cfg = {
+            "message": call.data.get("message", ""),
+            "style": call.data.get("style", "card"),
+            "icon": call.data.get("icon"),
+            "color": call.data.get("color"),
+            "rainbow": call.data.get("rainbow", False),
+            "font": call.data.get("font", "pixel"),
+            "duration": call.data.get("duration", 15),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        if not str(cfg["message"]).strip():
+            _LOGGER.error("show_message service requires 'message'")
+            return
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_show_message(cfg)
+
+    hass.services.async_register(DOMAIN, "show_message", async_show_message)
+
+    # Register stop_message service
+    async def async_stop_message(call):
+        """Handle the stop_message service call: end early and restore."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_end_message()
+
+    hass.services.async_register(DOMAIN, "stop_message", async_stop_message)
+
+    # Register show_clock service
+    async def async_show_clock(call):
+        """Handle the show_clock service call."""
+        cfg = {
+            "face": call.data.get("face", "pixel"),
+            "color": call.data.get("color"),
+            "hour24": call.data.get("hour24", True),
+            "show_date": call.data.get("show_date", True),
+            "pixel_size": call.data.get("pixel_size"),
+        }
+        follow = call.data.get("follow", True)
+
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                if follow:
+                    await coordinator.async_start_clock_mode(cfg)
+                else:
+                    await coordinator.async_show_clock(cfg, force=True)
+
+    hass.services.async_register(DOMAIN, "show_clock", async_show_clock)
+
+    # Register stop_clock service
+    async def async_stop_clock(call):
+        """Handle the stop_clock service call."""
+        for coordinator in list(hass.data[DOMAIN].values()):
+            if isinstance(coordinator, IDotMatrixCoordinator):
+                await coordinator.async_stop_clock_mode()
+
+    hass.services.async_register(DOMAIN, "stop_clock", async_stop_clock)
 
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if coordinator and hasattr(coordinator, "_clear_face_tracking"):
-        coordinator._clear_face_tracking()
+    if coordinator:
+        if hasattr(coordinator, "_clear_face_tracking"):
+            coordinator._clear_face_tracking()
+        if hasattr(coordinator, "async_stop_gif_rotation"):
+            await coordinator.async_stop_gif_rotation()
+        if hasattr(coordinator, "async_stop_weather_mode"):
+            await coordinator.async_stop_weather_mode()
+        if hasattr(coordinator, "async_stop_bitcoin_mode"):
+            await coordinator.async_stop_bitcoin_mode()
+        if hasattr(coordinator, "async_stop_co2_mode"):
+            await coordinator.async_stop_co2_mode()
+        if hasattr(coordinator, "async_stop_power_mode"):
+            await coordinator.async_stop_power_mode()
+        if hasattr(coordinator, "async_stop_thermostat_mode"):
+            await coordinator.async_stop_thermostat_mode()
+        if hasattr(coordinator, "async_stop_sun_mode"):
+            await coordinator.async_stop_sun_mode()
+        if hasattr(coordinator, "async_stop_moon_mode"):
+            await coordinator.async_stop_moon_mode()
+        if hasattr(coordinator, "async_stop_message_mode"):
+            await coordinator.async_stop_message_mode()
+        if hasattr(coordinator, "async_stop_clock_mode"):
+            await coordinator.async_stop_clock_mode()
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
 

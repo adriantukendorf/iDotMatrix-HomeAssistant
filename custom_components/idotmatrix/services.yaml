@@ -52,3 +52,510 @@ render_preview:
 list_fonts:
   name: List fonts
   description: Return available fonts for the designer.
+
+display_gif:
+  name: Display GIF
+  description: Display animated GIFs on the iDotMatrix device. Can show a single GIF or rotate through a folder of GIFs.
+  fields:
+    path:
+      required: true
+      description: Path to a GIF file or folder containing GIF files.
+      example: "/config/www/idotmatrix/gifs"
+      selector:
+        text:
+    rotation_interval:
+      required: false
+      description: Carousel interval - how long each GIF displays before advancing to the next (batch mode only). The device handles the rotation natively. Common values are 5, 10, 30, 60, or 300 seconds.
+      default: 5
+      example: 10
+      selector:
+        number:
+          min: 1
+          max: 255
+          unit_of_measurement: seconds
+          mode: box
+
+stop_gif_rotation:
+  name: Stop GIF Rotation
+  description: Stop the current GIF rotation if one is running.
+
+show_weather:
+  name: Show weather dashboard
+  description: >
+    Display an animated weather dashboard with pixel-art condition icons,
+    temperature, high/low, humidity and wind. Data comes from a weather
+    entity, individual sensors, or a mix of both (sensor overrides win).
+    By default the display keeps updating automatically when the source
+    entities change.
+  fields:
+    weather_entity:
+      required: false
+      description: Weather entity used for condition, temperature, humidity, wind and forecast high/low.
+      default: weather.openweathermap
+      example: weather.openweathermap
+      selector:
+        entity:
+          domain: weather
+    condition_entity:
+      required: false
+      description: Sensor overriding the condition. Accepts HA conditions or free text like "broken clouds" / "light rain" (e.g. an OpenWeatherMap weather sensor).
+      example: sensor.openweathermap_weather
+      selector:
+        entity:
+          domain: sensor
+    temperature_entity:
+      required: false
+      description: Sensor overriding the temperature (e.g. a local weather station).
+      example: sensor.gw2000b_outdoor_temperature
+      selector:
+        entity:
+          domain: sensor
+    humidity_entity:
+      required: false
+      description: Sensor overriding the humidity.
+      example: sensor.gw2000b_humidity
+      selector:
+        entity:
+          domain: sensor
+    wind_entity:
+      required: false
+      description: Sensor overriding the wind speed.
+      selector:
+        entity:
+          domain: sensor
+    high_entity:
+      required: false
+      description: Sensor overriding today's forecast high.
+      selector:
+        entity:
+          domain: sensor
+    low_entity:
+      required: false
+      description: Sensor overriding today's forecast low.
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full dashboard, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when source entities change (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_weather:
+  name: Stop weather dashboard
+  description: Stop weather dashboard auto-updates.
+
+show_bitcoin:
+  name: Show Bitcoin ticker
+  description: >
+    Display an animated Bitcoin price ticker with a spinning pixel-art
+    Bitcoin coin. The price is colored by the direction of its last move
+    (green up, red down). By default the display keeps updating
+    automatically when the price changes.
+  fields:
+    price_entity:
+      required: false
+      description: Sensor with the current USD price. Defaults to sensor.bitcoin_price.
+      default: sensor.bitcoin_price
+      example: sensor.bitcoin_price
+      selector:
+        entity:
+          domain: sensor
+    change_entity:
+      required: false
+      description: Optional sensor with the 24h change percentage, shown below the price.
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full ticker, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the price changes (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_bitcoin:
+  name: Stop Bitcoin ticker
+  description: Stop Bitcoin ticker auto-updates.
+
+show_co2:
+  name: Show CO2 gauge
+  description: >
+    Display a CO2 concentration gauge with a color-coded bar and status
+    label (Good/OK/Fair/Poor/Bad). The gauge updates automatically when
+    the sensor value changes.
+  fields:
+    co2_entity:
+      required: false
+      description: Sensor with the current CO2 concentration in ppm.
+      default: sensor.aranet4_19d46_carbon_dioxide
+      example: sensor.aranet4_19d46_carbon_dioxide
+      selector:
+        entity:
+          domain: sensor
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full gauge, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the CO2 level changes (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_co2:
+  name: Stop CO2 gauge
+  description: Stop CO2 gauge auto-updates.
+
+show_power:
+  name: Show power gauge
+  description: >
+    Display whole-house power usage with a color-coded bar gauge scaled
+    0-5000 W and a status label (Low/Norm/Med/High/Peak/Max). The gauge
+    updates automatically (at most every 15s) as the power sensor changes.
+    If thermostats are given, the caption flags when the furnace or AC is
+    running so a spike explains itself.
+  fields:
+    power_entity:
+      required: false
+      description: Sensor with the current total active power in watts.
+      default: sensor.shellypro3em_0cb815fd2f44_total_active_power
+      example: sensor.shellypro3em_0cb815fd2f44_total_active_power
+      selector:
+        entity:
+          domain: sensor
+    heat_entity:
+      required: false
+      description: Heating thermostat; when it reports heating, the caption shows a flame and "HEAT ON".
+      default: climate.nest_learning_thermostat_4th_gen
+      selector:
+        entity:
+          domain: climate
+    cool_entity:
+      required: false
+      description: Cooling thermostat; when it reports cooling, the caption shows a snowflake and "AC ON".
+      default: climate.nest_thermostat
+      selector:
+        entity:
+          domain: climate
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full gauge, 32 a compact layout.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when power usage changes (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_power:
+  name: Stop power gauge
+  description: Stop power gauge auto-updates.
+
+show_thermostat:
+  name: Show thermostat status
+  description: >
+    Display the heating and cooling thermostats as two stacked panels: a
+    flame or snowflake icon, ON/IDLE/OFF status, the room temperature and
+    the setpoint. Icons animate while a zone is actively running. Updates
+    automatically as the climate entities change.
+  fields:
+    heat_entity:
+      required: false
+      description: Climate entity for the heating zone (top panel).
+      default: climate.nest_learning_thermostat_4th_gen
+      selector:
+        entity:
+          domain: climate
+    cool_entity:
+      required: false
+      description: Climate entity for the cooling zone (bottom panel).
+      default: climate.nest_thermostat
+      selector:
+        entity:
+          domain: climate
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders both panels in full, 32 a compact icon + temperature list.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically when the thermostats change (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_thermostat:
+  name: Stop thermostat status
+  description: Stop thermostat status auto-updates.
+
+show_sun:
+  name: Show sunrise / sunset arc
+  description: >
+    Display a horizon with the sun travelling an arc from sunrise to
+    sunset (the moon takes the arc at night). Shows sunrise and sunset
+    times, daylight length and a countdown to the next event. Uses the
+    home location configured in Home Assistant; refreshes every minute.
+  fields:
+    hour24:
+      required: false
+      description: Show sunrise/sunset times in 24-hour format (default true).
+      default: true
+      selector:
+        boolean:
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full layout, 32 a compact arc with the next event time.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_sun:
+  name: Stop sunrise / sunset arc
+  description: Stop sun arc auto-updates.
+
+show_moon:
+  name: Show moon phase
+  description: >
+    Display the current moon phase as a large disc with the correct
+    terminator shape, the phase name, the illuminated percentage and the
+    days until the next full or new moon. Computed from the date, so no
+    entity is needed; the lit side is mirrored in the southern hemisphere.
+    Refreshes hourly.
+  fields:
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full layout, 32 a compact disc with the illumination.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the display updated automatically (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_moon:
+  name: Stop moon phase
+  description: Stop moon phase auto-updates.
+
+show_message:
+  name: Show message
+  description: >
+    Push a one-shot message to the panel from any automation. Pick a style
+    (card, alert, marquee, party, typewriter), an optional icon, a color or
+    rainbow text, and the house pixel font or the Press Start 2P arcade
+    font. When the duration elapses the display that was showing before
+    (weather, moon, photos, ...) comes back on its own. A darkened panel
+    is woken for the message and darkened again afterwards.
+  fields:
+    message:
+      required: true
+      description: The text to show. Use a newline to force a line break.
+      example: Front door open
+      selector:
+        text:
+          multiline: true
+    style:
+      required: false
+      description: >
+        card = icon + wrapped text (long text pages every 3s);
+        alert = card with pulsing border and blinking icon;
+        marquee = ticker scrolling past a pinned icon;
+        party = one word at a time in random colors with confetti;
+        typewriter = characters appear behind a blinking cursor.
+      default: card
+      selector:
+        select:
+          options:
+            - card
+            - alert
+            - marquee
+            - party
+            - typewriter
+    icon:
+      required: false
+      description: Optional 16x16 icon.
+      selector:
+        select:
+          options:
+            - alert
+            - bell
+            - bolt
+            - car
+            - check
+            - coffee
+            - cross
+            - dog
+            - door
+            - drop
+            - flame
+            - gift
+            - heart
+            - home
+            - info
+            - mail
+            - moon
+            - music
+            - package
+            - phone
+            - snowflake
+            - star
+            - sun
+            - timer
+    color:
+      required: false
+      description: Text color. Defaults to white (phosphor green for typewriter).
+      selector:
+        color_rgb:
+    rainbow:
+      required: false
+      description: Animated rainbow text instead of a single color.
+      default: false
+      selector:
+        boolean:
+    font:
+      required: false
+      description: pixel = the 5x7 house font; arcade = Press Start 2P (8x8, has lowercase); tiny = minimalist 3x5 that fits 15 characters per line.
+      default: pixel
+      selector:
+        select:
+          options:
+            - pixel
+            - arcade
+            - tiny
+    duration:
+      required: false
+      description: Seconds to show the message before restoring the previous display. 0 keeps it until stop_message.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    pixel_size:
+      required: false
+      description: Display resolution. 64 renders the full styles, 32 a compact card.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+
+stop_message:
+  name: Stop message
+  description: End the current message early and restore the previous display.
+
+show_clock:
+  name: Show clock
+  description: >
+    Display a clock. The default "pixel" face is rendered by the
+    integration in the house pixel-art style (big HH:MM with a blinking
+    colon, weekday, date); "analog" is a minimal dial with accent ticks,
+    smooth hands and a pulsing center dot. Both are re-uploaded each
+    minute. Faces 0-7 use the device's built-in firmware clock styles,
+    which keep time on the panel itself with no further BLE traffic.
+  fields:
+    face:
+      required: false
+      description: '"pixel" or "analog" for the custom rendered faces, or a native firmware style 0-7.'
+      default: pixel
+      selector:
+        select:
+          options:
+            - "pixel"
+            - "analog"
+            - "0"
+            - "1"
+            - "2"
+            - "3"
+            - "4"
+            - "5"
+            - "6"
+            - "7"
+    color:
+      required: false
+      description: Accent color (defaults to sky blue for the pixel face, green for analog) or text color for native styles.
+      selector:
+        color_rgb:
+    hour24:
+      required: false
+      description: 24-hour format (default true).
+      default: true
+      selector:
+        boolean:
+    show_date:
+      required: false
+      description: Show the date (default true).
+      default: true
+      selector:
+        boolean:
+    pixel_size:
+      required: false
+      description: Display resolution for the pixel face. 64 renders the full layout, 32 a compact one.
+      default: 64
+      selector:
+        select:
+          options:
+            - "64"
+            - "32"
+    follow:
+      required: false
+      description: Keep the pixel face updated every minute (default true). Set false for a one-shot render.
+      default: true
+      selector:
+        boolean:
+
+stop_clock:
+  name: Stop clock
+  description: Stop clock updates (pixel face) and clock mode tracking.

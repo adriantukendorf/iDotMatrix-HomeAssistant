@@ -3,7 +3,7 @@ from ..connectionManager import ConnectionManager
 import io
 import logging
 from PIL import Image as PilImage
-import struct
+import zlib
 
 
 class Image:
@@ -16,10 +16,10 @@ class Image:
         """Enter the DIY draw mode of the iDotMatrix device.
 
         Args:
-            mode (int): 0 = disable DIY, 1 = enable DIY, 2 = ?, 3 = ?. Defaults to 1.
+            mode (int): 0 = disable DIY, 1 = enable DIY. Defaults to 1.
 
         Returns:
-            Union[bool, bytearray]: False if there's an error, otherwise byte array of the command which needs to be sent to the device.
+            Union[bool, bytearray]: False if there's an error, otherwise byte array of the command.
         """
         try:
             data = bytearray([5, 0, 4, 1, mode % 256])
@@ -30,18 +30,6 @@ class Image:
         except BaseException as error:
             self.logging.error(f"could not enter image mode due to {error}")
             return False
-
-    def _loadPNG(self, file_path: str) -> bytes:
-        """Load a PNG file into a byte buffer.
-
-        Args:
-            file_path (str): path to file
-
-        Returns:
-            bytes: returns the file contents
-        """
-        with open(file_path, "rb") as file:
-            return file.read()
 
     def _splitIntoChunks(self, data: bytearray, chunk_size: int) -> List[bytearray]:
         """Split the data into chunks of specified size.
@@ -55,26 +43,53 @@ class Image:
         """
         return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
-    def _createPayloads(self, png_data: bytearray) -> bytearray:
-        """Creates payloads from a PNG file.
+    def _createPayloads(self, image_data: bytearray, chunk_size: int = 4096) -> List[bytearray]:
+        """Creates payloads from image data using the 16-byte chunk header.
+
+        Uses the same header format as GIF uploads, with type=2 for static images.
 
         Args:
-            png_data (bytearray): data of the png file
+            image_data (bytearray): raw RGB pixel data
+            chunk_size (int): size of a data chunk
 
         Returns:
-            bytearray: returns bytearray payload
+            List[bytearray]: list of bytearray payloads
         """
-        png_chunks = self._splitIntoChunks(png_data, 4096)
-        idk = len(png_data) + len(png_chunks)
-        idk_bytes = struct.pack("h", idk)  # Convert to 16-bit signed int
-        png_len_bytes = struct.pack("i", len(png_data))
-        payloads = bytearray()
-        for i, chunk in enumerate(png_chunks):
-            payload = (
-                idk_bytes + bytearray([0, 0, 2 if i > 0 else 0]) + png_len_bytes + chunk
-            )
-            payloads.extend(payload)
-        return payloads
+        # 16-byte chunk header (same format as GIF, type=2 for static image)
+        header = bytearray(
+            [
+                255,  # [0:2] chunk_length (filled per chunk)
+                255,
+                2,    # [2] type: 2 = Static Image
+                0,    # [3] reserved
+                0,    # [4] continuation: 0 = first, 2 = continuation
+                255,  # [5:9] file_size (filled below)
+                255,
+                255,
+                255,
+                255,  # [9:13] CRC32 (filled below)
+                255,
+                255,
+                255,
+                5,    # [13] carousel interval in seconds (default 5)
+                0,    # [14] reserved
+                0x0d, # [15] single upload marker
+            ]
+        )
+        chunks = []
+        data_chunks = self._splitIntoChunks(image_data, chunk_size)
+        # set file length
+        header[5:9] = int(len(image_data)).to_bytes(4, byteorder="little")
+        # set CRC32
+        crc = zlib.crc32(image_data)
+        header[9:13] = crc.to_bytes(4, byteorder="little")
+        # iterate over chunks
+        for i, chunk in enumerate(data_chunks):
+            header[4] = 2 if i > 0 else 0
+            chunk_len = len(chunk) + len(header)
+            header[0:2] = chunk_len.to_bytes(2, byteorder="little")
+            chunks.append(bytearray(header) + chunk)
+        return chunks
 
     async def uploadUnprocessed(self, file_path: str) -> Union[bool, bytearray]:
         """Uploads an image without further checks and resizes.
@@ -86,11 +101,19 @@ class Image:
             Union[bool, bytearray]: False if there's an error, otherwise returns bytearray payload
         """
         try:
-            png_data = self._loadPNG(file_path)
-            data = self._createPayloads(png_data)
+            import asyncio
+
+            def load_raw_rgb(path):
+                with PilImage.open(path) as img:
+                    img = img.convert("RGB")
+                    return bytearray(img.tobytes())
+
+            raw_data = await asyncio.to_thread(load_raw_rgb, file_path)
+            data = self._createPayloads(raw_data)
             if self.conn:
                 await self.conn.connect()
-                await self.conn.send(data=data)
+                for chunk in data:
+                    await self.conn.send(data=chunk)
             return data
         except BaseException as error:
             self.logging.error(f"could not upload the unprocessed image: {error}")
@@ -110,32 +133,24 @@ class Image:
         """
         try:
             import asyncio
-            
+
             def process_image_sync():
                 with PilImage.open(file_path) as img:
-                    # Convert to RGB to ensure compatibility and drop some metadata
                     img = img.convert("RGB")
-                    
                     if img.size != (pixel_size, pixel_size):
                         img = img.resize(
                             (pixel_size, pixel_size), PilImage.LANCZOS
                         )
-                    
-                    # Strip metadata by clearing info
-                    img.info = {}
-                    
-                    png_buffer = io.BytesIO()
-                    # Save with optimize=True to further reduce size
-                    img.save(png_buffer, format="PNG", optimize=True)
-                    png_buffer.seek(0)
-                    return png_buffer.getvalue()
+                    # Return raw RGB pixel data (W*H*3 bytes)
+                    return bytearray(img.tobytes())
 
-            png_bytes = await asyncio.to_thread(process_image_sync)
-            data = self._createPayloads(png_bytes)
-            
+            raw_data = await asyncio.to_thread(process_image_sync)
+            data = self._createPayloads(raw_data)
+
             if self.conn:
                 await self.conn.connect()
-                await self.conn.send(data=data)
+                for chunk in data:
+                    await self.conn.send(data=chunk)
             return data
         except BaseException as error:
             self.logging.error(f"could not upload processed image: {error}")

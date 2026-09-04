@@ -62,16 +62,20 @@ class IDotMatrixLight(IDotMatrixEntity, LightEntity):
         
         # 1. On
         if not self.is_on:
-             await Common().screenOn()
+             # Hold the device lock so screen/brightness commands can't
+             # interleave with an upload stream in progress.
+             async with self.coordinator._device_lock:
+                 await Common().screenOn()
              self.coordinator.text_settings["is_on"] = True
-        
+
         # 2. Brightness
         if ATTR_BRIGHTNESS in kwargs:
             bright = kwargs[ATTR_BRIGHTNESS]
             self.coordinator.text_settings["brightness"] = bright
             # Map 0-255 to 5-100
             val = max(5, int((bright / 255) * 100))
-            await Common().setBrightness(val)
+            async with self.coordinator._device_lock:
+                await Common().setBrightness(val)
             
         # 3. Color
         if ATTR_RGB_COLOR in kwargs:
@@ -85,6 +89,7 @@ class IDotMatrixLight(IDotMatrixEntity, LightEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn the light off."""
-        await Common().screenOff()
+        async with self.coordinator._device_lock:
+            await Common().screenOff()
         self.coordinator.text_settings["is_on"] = False
         self.async_write_ha_state()

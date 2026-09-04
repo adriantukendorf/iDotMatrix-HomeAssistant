@@ -12,21 +12,41 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+    async_track_time_interval,
+)
 
 from .const import DOMAIN, CONF_DISPLAY_MODE, DISPLAY_MODE_DESIGN, DISPLAY_MODE_TEXT
 from .client.connectionManager import ConnectionManager
+from bleak.exc import BleakError
 from .client.modules.text import Text
 from .client.modules.image import Image as IDMImage
+from .client.modules.gif import Gif as IDMGif
 from .client.modules.clock import Clock
+from .client.modules.common import Common
+from .client.modules.fullscreenColor import FullscreenColor
+from .clockface import ClockFaceData, render_analog_gif, render_clockface_gif
+from .weather import WeatherData, render_weather_gif, normalize_condition
+from .bitcoin import TickerData, render_bitcoin_gif
+from .co2 import CO2Data, render_co2_gif
+from .power import PowerData, render_power_gif
+from .thermostat import ThermostatData, ZoneState, render_thermostat_gif
+from .sun import SunData, render_sun_gif
+from .moon import MoonData, moon_age, render_moon_gif
+from .message import MessageSpec, render_message_gif
 
 
 from homeassistant.helpers import template
 from homeassistant.util import dt as dt_util
+from homeassistant.helpers.sun import get_astral_event_date
 
 import os
 import tempfile
 import io
+import random
 from PIL import Image, ImageDraw, ImageFont
 
 from homeassistant.helpers.storage import Store
@@ -68,7 +88,87 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         self._mdi_lock = asyncio.Lock()
         self._mdi_error_logged = False
         self._mdi_unknown_icons: set[str] = set()
-        
+
+        # Serializes every upload/command sequence to the device. Mode
+        # switches (e.g. starting the Photos batch) can otherwise overlap an
+        # in-flight upload (clock minute tick, weather refresh) and the
+        # interleaved chunks corrupt the device parser — observed as reboots
+        # when switching to Photos while the device is busy.
+        self._device_lock = asyncio.Lock()
+
+        # True while the device runs the batch carousel: it ignores single
+        # GIF uploads in that state (Feb 2026 finding), so the next single
+        # upload must send the 8none1 reset first to escape it. Starts True
+        # because the device state after an HA restart is unknown.
+        self._carousel_active = True
+
+        # GIF rotation tracking
+        self._gif_rotation_task: asyncio.Task | None = None
+        self._gif_rotation_stop = asyncio.Event()
+
+        # Weather mode tracking
+        self._weather_cfg: dict | None = None
+        self._weather_unsubs: list = []
+        self._weather_debounce_unsub = None
+        self._weather_signature: tuple | None = None
+        self._weather_lock = asyncio.Lock()
+
+        # Bitcoin ticker mode tracking
+        self._btc_cfg: dict | None = None
+        self._btc_unsubs: list = []
+        self._btc_debounce_unsub = None
+        self._btc_signature: tuple | None = None
+        self._btc_last_price: float | None = None
+        self._btc_direction: int = 0
+        self._btc_lock = asyncio.Lock()
+
+        # CO2 gauge mode tracking
+        self._co2_cfg: dict | None = None
+        self._co2_unsubs: list = []
+        self._co2_debounce_unsub = None
+        self._co2_signature: tuple | None = None
+        self._co2_lock = asyncio.Lock()
+
+        # Power gauge mode tracking
+        self._power_cfg: dict | None = None
+        self._power_unsubs: list = []
+        self._power_throttle_unsub = None
+        self._power_signature: tuple | None = None
+        self._power_lock = asyncio.Lock()
+
+        # Sun arc mode tracking
+        self._sun_cfg: dict | None = None
+        self._sun_unsub = None
+        self._sun_signature: tuple | None = None
+        self._sun_lock = asyncio.Lock()
+
+        # Moon phase mode tracking
+        self._moon_cfg: dict | None = None
+        self._moon_unsub = None
+        self._moon_signature: tuple | None = None
+        self._moon_lock = asyncio.Lock()
+
+        # One-shot message tracking (restores the previous mode afterwards)
+        self._message_cfg: dict | None = None
+        self._message_prev: tuple | None = None
+        self._message_unsub = None
+        self._message_woke_screen = False
+        self._message_lock = asyncio.Lock()
+        self._gif_cfg: dict | None = None
+
+        # Thermostat mode tracking
+        self._thermostat_cfg: dict | None = None
+        self._thermostat_unsubs: list = []
+        self._thermostat_debounce_unsub = None
+        self._thermostat_signature: tuple | None = None
+        self._thermostat_lock = asyncio.Lock()
+
+        # Clock mode tracking
+        self._clock_cfg: dict | None = None
+        self._clock_unsub = None
+        self._clock_signature: tuple | None = None
+        self._clock_lock = asyncio.Lock()
+
         # Shared settings for Text entity
         self.text_settings = {
             "current_text": "",   # The actual text content
@@ -799,3 +899,1346 @@ class IDotMatrixCoordinator(DataUpdateCoordinator):
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    async def async_display_gif(
+        self,
+        path: str,
+        rotation_interval: int = 5,
+    ) -> None:
+        """Display GIF(s) on the device.
+
+        Args:
+            path: Path to a single GIF file or a folder containing GIF files.
+            rotation_interval: Carousel interval in seconds - how long each GIF
+                               displays before advancing to the next (batch mode).
+                               Common values: 5, 10, 30, 60, 300. Defaults to 5.
+        """
+        # Stop any existing rotation, weather, or ticker mode
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._gif_cfg = {"path": path, "rotation_interval": rotation_interval}
+
+        screen_size = int(self.text_settings.get("screen_size", 32))
+        # Clamp interval to uint8 range
+        interval = max(1, min(255, int(rotation_interval)))
+
+        # Check path type in executor to avoid blocking
+        is_file = await self.hass.async_add_executor_job(os.path.isfile, path)
+        is_dir = await self.hass.async_add_executor_job(os.path.isdir, path)
+
+        # Determine if path is a file or directory
+        if is_file:
+            # Single file: use single upload protocol (index=0x0d, no batch
+            # commands), so the file replaces the display without touching
+            # the 12 carousel slots. (Batch slots handle large files fine —
+            # the folder path below feeds them 100KB+ GIFs reliably.)
+            _LOGGER.debug(f"Uploading single GIF (single protocol): {path}")
+
+            async def _reset_and_upload_single():
+                # Reset first (packets found by 8none1): clears any wedged
+                # upload/parser state left by a previously aborted stream.
+                await Common().reset()
+                await asyncio.sleep(0.6)
+                ok = await IDMGif().uploadSingleRaw(path)
+                if ok:
+                    self._carousel_active = False
+                return ok
+
+            success = await self._device_call(_reset_and_upload_single)
+            if not success:
+                _LOGGER.error(f"Single GIF upload failed: {path}")
+        elif is_dir:
+            # Folder mode - find all GIF files (in executor to avoid blocking)
+            def find_gifs(folder):
+                files = [
+                    os.path.join(folder, f)
+                    for f in os.listdir(folder)
+                    if f.lower().endswith(".gif")
+                ]
+                random.shuffle(files)
+                return files
+
+            gif_files = await self.hass.async_add_executor_job(find_gifs, path)
+
+            if not gif_files:
+                _LOGGER.warning(f"No GIF files found in {path}")
+                return
+
+            # Batch upload (works for 1 or many)
+            batch = gif_files[:12]
+            _LOGGER.debug(
+                f"Batch uploading {len(batch)} GIFs from "
+                f"{len(gif_files)} available, interval={interval}s"
+            )
+            # Deliberately NOT shielded: the batch crawls (minutes) while
+            # the device renders the carousel it's uploading into, and a
+            # shielded batch holds the device lock hostage — every other
+            # mode appears frozen. Cancellation mid-batch is safe now:
+            # _carousel_active stays True, so the next single upload sends
+            # the reset first and clears the partial stream.
+            async with self._device_lock:
+                # Reset first (packets found by 8none1): clears any wedged
+                # upload/parser state left by a previously aborted stream.
+                await Common().reset()
+                await asyncio.sleep(0.6)
+                # Mark before streaming: even a partial batch leaves the
+                # device in carousel mode.
+                self._carousel_active = True
+                success = await IDMGif().uploadBatch(
+                    batch, pixel_size=screen_size, interval=interval, raw=True
+                )
+            if not success:
+                _LOGGER.error("Batch GIF upload failed")
+        else:
+            _LOGGER.error(f"Path does not exist: {path}")
+
+    async def _upload_single(self, gif_bytes: bytes) -> bool:
+        """Upload a single rendered GIF, escaping the device's carousel mode
+        first if it's running (the device ignores single uploads
+        mid-carousel; the 8none1 reset verifiably drops it back to idle).
+
+        The temp file lives entirely inside the shielded task: if the
+        caller is cancelled while waiting for the device lock, an outer
+        finally must not delete the file before the upload reads it."""
+        async def run():
+            def write_tmp() -> str:
+                fd, path = tempfile.mkstemp(suffix=".gif")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(gif_bytes)
+                return path
+
+            tmp_path = await self.hass.async_add_executor_job(write_tmp)
+            try:
+                if self._carousel_active:
+                    await Common().reset()
+                    await asyncio.sleep(0.6)
+                ok = await IDMGif().uploadSingleRaw(tmp_path)
+                if ok:
+                    self._carousel_active = False
+                return ok
+            finally:
+                await self.hass.async_add_executor_job(os.remove, tmp_path)
+        return await self._device_call(run)
+
+    async def _device_call(self, fn, *args):
+        """Run a device write sequence under the device lock, shielded from
+        task cancellation.
+
+        A restarted automation/script cancels the service call it was
+        running; aborting an upload mid-stream leaves the device parser
+        waiting for the rest of the file, and the next upload's bytes get
+        consumed as bogus continuation data (wedged parser / reboot).
+        Shielding lets an upload that has started always run to completion
+        while the caller still sees the cancellation.
+        """
+        return await asyncio.shield(self._device_call_locked(fn, *args))
+
+    async def _device_call_locked(self, fn, *args):
+        async with self._device_lock:
+            return await fn(*args)
+
+    async def _upload_gif(self, file_path: str, pixel_size: int) -> bool:
+        """Upload a single GIF to the device with retry logic."""
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                # Check if connection manager has a connected client
+                conn = ConnectionManager()
+                if conn.client and not conn.client.is_connected:
+                    _LOGGER.warning("Device disconnected, attempting reconnect...")
+
+                gif_instance = IDMGif()
+                result = await gif_instance.uploadProcessed(file_path, pixel_size=pixel_size)
+                if result:
+                    _LOGGER.debug(f"Successfully uploaded GIF: {file_path}")
+                    return True
+                else:
+                    _LOGGER.warning(f"Upload returned false for: {file_path}")
+
+            except asyncio.TimeoutError:
+                _LOGGER.warning(f"Timeout uploading GIF (attempt {attempt + 1}/{max_retries}): {file_path}")
+            except BleakError as e:
+                _LOGGER.warning(f"Bluetooth error (attempt {attempt + 1}/{max_retries}): {e}")
+            except Exception as e:
+                _LOGGER.warning(f"Error (attempt {attempt + 1}/{max_retries}): {e}")
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_retries - 1:
+                _LOGGER.info(f"Retrying upload in 2 seconds...")
+                await asyncio.sleep(2)
+
+        _LOGGER.error(f"Failed to upload GIF after {max_retries} attempts: {file_path}")
+        return False
+
+    async def _gif_rotation_loop(
+        self,
+        gif_files: list[str],
+        interval: float,
+        loop: bool,
+        pixel_size: int,
+    ) -> None:
+        """Background task that rotates through GIFs."""
+        MAX_CONSECUTIVE_FAILURES = 3
+        consecutive_failures = 0
+
+        try:
+            index = 0
+            while True:
+                if self._gif_rotation_stop.is_set():
+                    _LOGGER.debug("GIF rotation stopped by request")
+                    break
+
+                gif_path = gif_files[index]
+                _LOGGER.debug(f"Displaying GIF {index + 1}/{len(gif_files)}: {gif_path}")
+
+                success = await self._upload_gif(gif_path, pixel_size)
+
+                if success:
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    _LOGGER.warning(
+                        f"GIF upload failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {gif_path}"
+                    )
+
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        _LOGGER.error(
+                            "GIF rotation stopped: too many consecutive failures. "
+                            "Device may be offline or unreachable."
+                        )
+                        break
+
+                index += 1
+                if index >= len(gif_files):
+                    if loop:
+                        index = 0
+                        random.shuffle(gif_files)  # Reshuffle for next cycle
+                        _LOGGER.debug("GIF rotation: reshuffled for next cycle")
+                    else:
+                        _LOGGER.debug("GIF rotation completed (non-looping)")
+                        break
+
+                # Wait for the interval or until stopped
+                try:
+                    await asyncio.wait_for(
+                        self._gif_rotation_stop.wait(),
+                        timeout=interval
+                    )
+                    # If we get here, stop was requested
+                    _LOGGER.debug("GIF rotation stopped during wait")
+                    break
+                except asyncio.TimeoutError:
+                    # Normal timeout, continue to next GIF
+                    pass
+
+        except asyncio.CancelledError:
+            _LOGGER.debug("GIF rotation task cancelled")
+        except Exception as e:
+            _LOGGER.error(f"Error in GIF rotation loop: {e}")
+        finally:
+            self._gif_rotation_task = None
+
+    async def async_stop_gif_rotation(self) -> None:
+        """Stop the current GIF rotation if running."""
+        self._gif_cfg = None
+        if self._gif_rotation_task is not None:
+            self._gif_rotation_stop.set()
+            self._gif_rotation_task.cancel()
+            try:
+                await self._gif_rotation_task
+            except asyncio.CancelledError:
+                pass
+            self._gif_rotation_task = None
+            _LOGGER.debug("GIF rotation stopped")
+
+    # ------------------------------------------------------------------
+    # Weather dashboard mode
+    # ------------------------------------------------------------------
+
+    def _read_float_state(self, entity_id: str | None) -> float | None:
+        """Read a numeric sensor state, or None if unavailable."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable", "", None):
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
+
+    def _read_climate_zone(self, entity_id: str | None,
+                           kind: str) -> ZoneState | None:
+        """Read a climate entity into a ZoneState, or None if unavailable."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ("unknown", "unavailable", "", None):
+            return None
+        attrs = state.attributes
+
+        def num(key):
+            v = attrs.get(key)
+            try:
+                return None if v is None else float(v)
+            except (ValueError, TypeError):
+                return None
+
+        target = num("temperature")
+        if target is None:
+            # heat_cool mode exposes a range instead of a single setpoint
+            target = num("target_temp_low" if kind == "heat"
+                         else "target_temp_high")
+
+        action = attrs.get("hvac_action")
+        if not action:
+            action = "off" if state.state == "off" else "idle"
+        return ZoneState(kind=kind, current=num("current_temperature"),
+                         target=target, action=str(action))
+
+    async def _get_forecast_high_low(self, entity_id: str) -> tuple:
+        """Fetch today's high/low from a weather entity's forecast."""
+        for forecast_type in ("daily", "hourly"):
+            try:
+                resp = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": entity_id, "type": forecast_type},
+                    blocking=True,
+                    return_response=True,
+                )
+            except Exception as e:
+                _LOGGER.debug(f"get_forecasts ({forecast_type}) failed: {e}")
+                continue
+            forecast = ((resp or {}).get(entity_id) or {}).get("forecast") or []
+            if not forecast:
+                continue
+            if forecast_type == "daily":
+                today = forecast[0]
+                return today.get("temperature"), today.get("templow")
+            temps = [
+                e.get("temperature")
+                for e in forecast[:24]
+                if e.get("temperature") is not None
+            ]
+            if temps:
+                return max(temps), min(temps)
+        return None, None
+
+    async def _get_weather_data(self, cfg: dict) -> WeatherData | None:
+        """Assemble weather data from a weather entity and/or sensor overrides."""
+        condition_raw = None
+        temp = humidity = wind = high = low = None
+        temp_unit = self.hass.config.units.temperature_unit
+
+        if entity_id := cfg.get("weather_entity"):
+            state = self.hass.states.get(entity_id)
+            if state and state.state not in ("unknown", "unavailable"):
+                condition_raw = state.state
+                attrs = state.attributes
+                temp = attrs.get("temperature")
+                temp_unit = attrs.get("temperature_unit") or temp_unit
+                humidity = attrs.get("humidity")
+                wind = attrs.get("wind_speed")
+                high, low = await self._get_forecast_high_low(entity_id)
+            else:
+                _LOGGER.warning(f"Weather entity {entity_id} is unavailable")
+
+        # Sensor overrides (e.g. a local weather station for temp/humidity,
+        # an OpenWeatherMap description sensor for the condition)
+        if cond_entity := cfg.get("condition_entity"):
+            state = self.hass.states.get(cond_entity)
+            if state and state.state not in ("unknown", "unavailable"):
+                condition_raw = state.state
+        if (v := self._read_float_state(cfg.get("temperature_entity"))) is not None:
+            temp = v
+            unit_state = self.hass.states.get(cfg["temperature_entity"])
+            if unit_state and (u := unit_state.attributes.get("unit_of_measurement")):
+                temp_unit = u
+        if (v := self._read_float_state(cfg.get("humidity_entity"))) is not None:
+            humidity = v
+        if (v := self._read_float_state(cfg.get("wind_entity"))) is not None:
+            wind = v
+        if (v := self._read_float_state(cfg.get("high_entity"))) is not None:
+            high = v
+        if (v := self._read_float_state(cfg.get("low_entity"))) is not None:
+            low = v
+
+        if condition_raw is None and temp is None:
+            return None
+
+        sun_state = self.hass.states.get("sun.sun")
+        is_night = bool(sun_state and sun_state.state == "below_horizon")
+        condition = normalize_condition(condition_raw, is_night)
+
+        return WeatherData(
+            condition=condition,
+            temperature=temp,
+            temp_unit=temp_unit,
+            humidity=humidity,
+            wind_speed=wind,
+            high=high,
+            low=low,
+        )
+
+    async def async_show_weather(self, cfg: dict, force: bool = False) -> bool:
+        """Render the weather dashboard GIF and upload it to the device."""
+        async with self._weather_lock:
+            data = await self._get_weather_data(cfg)
+            if data is None:
+                _LOGGER.warning(
+                    "Weather mode: no data available (check weather_entity / "
+                    "sensor entities)"
+                )
+                return False
+
+            signature = data.signature()
+            if not force and signature == self._weather_signature:
+                _LOGGER.debug("Weather unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_weather_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._weather_signature = signature
+                _LOGGER.debug(
+                    f"Weather dashboard uploaded: {data.condition}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Weather dashboard upload failed")
+            return success
+
+    async def async_start_weather_mode(self, cfg: dict) -> None:
+        """Show the weather dashboard and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._weather_cfg = cfg
+        entities = [
+            e
+            for e in (
+                cfg.get(k)
+                for k in (
+                    "weather_entity",
+                    "condition_entity",
+                    "temperature_entity",
+                    "humidity_entity",
+                    "wind_entity",
+                    "high_entity",
+                    "low_entity",
+                )
+            )
+            if e
+        ]
+        if entities:
+            _LOGGER.info(f"Weather mode tracking entities: {entities}")
+            self._weather_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_weather_state_change
+                )
+            )
+        # Periodic refresh catches forecast high/low drift, which doesn't
+        # always fire state change events. Signature check keeps it cheap.
+        self._weather_unsubs.append(
+            async_track_time_interval(
+                self.hass, self._on_weather_timer, timedelta(minutes=15)
+            )
+        )
+        await self.async_show_weather(cfg, force=True)
+
+    @callback
+    def _on_weather_state_change(self, event: Event) -> None:
+        """Debounce bursts of sensor updates before re-rendering."""
+        if self._weather_debounce_unsub:
+            self._weather_debounce_unsub()
+        self._weather_debounce_unsub = async_call_later(
+            self.hass, 10, self._weather_debounced_refresh
+        )
+
+    @callback
+    def _weather_debounced_refresh(self, _now) -> None:
+        self._weather_debounce_unsub = None
+        if self._weather_cfg:
+            self.hass.async_create_task(self.async_show_weather(self._weather_cfg))
+
+    @callback
+    def _on_weather_timer(self, _now) -> None:
+        if self._weather_cfg:
+            self.hass.async_create_task(self.async_show_weather(self._weather_cfg))
+
+    async def async_stop_weather_mode(self) -> None:
+        """Stop weather mode tracking."""
+        if self._weather_debounce_unsub:
+            self._weather_debounce_unsub()
+            self._weather_debounce_unsub = None
+        for unsub in self._weather_unsubs:
+            unsub()
+        if self._weather_unsubs or self._weather_cfg:
+            _LOGGER.debug("Weather mode stopped")
+        self._weather_unsubs = []
+        self._weather_cfg = None
+        self._weather_signature = None
+
+    # ------------------------------------------------------------------
+    # Bitcoin ticker mode
+    # ------------------------------------------------------------------
+
+    async def async_show_bitcoin(self, cfg: dict, force: bool = False) -> bool:
+        """Render the Bitcoin ticker GIF and upload it to the device."""
+        async with self._btc_lock:
+            price = self._read_float_state(cfg.get("price_entity"))
+            if price is None:
+                _LOGGER.warning(
+                    "Bitcoin mode: price entity %s has no numeric state",
+                    cfg.get("price_entity"),
+                )
+                return False
+            change = self._read_float_state(cfg.get("change_entity"))
+
+            # Track direction of the last displayed price move
+            if self._btc_last_price is not None and round(price) != round(
+                self._btc_last_price
+            ):
+                self._btc_direction = 1 if price > self._btc_last_price else -1
+
+            data = TickerData(
+                price=price,
+                direction=self._btc_direction,
+                change_pct=change,
+            )
+            signature = data.signature()
+            if not force and signature == self._btc_signature:
+                _LOGGER.debug("Bitcoin price unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_bitcoin_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._btc_signature = signature
+                self._btc_last_price = price
+                _LOGGER.debug(
+                    f"Bitcoin ticker uploaded: ${price:,.0f}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Bitcoin ticker upload failed")
+            return success
+
+    async def async_start_bitcoin_mode(self, cfg: dict) -> None:
+        """Show the Bitcoin ticker and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._btc_cfg = cfg
+        entities = [
+            e for e in (cfg.get("price_entity"), cfg.get("change_entity")) if e
+        ]
+        if entities:
+            _LOGGER.info(f"Bitcoin mode tracking entities: {entities}")
+            self._btc_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_btc_state_change
+                )
+            )
+        await self.async_show_bitcoin(cfg, force=True)
+
+    @callback
+    def _on_btc_state_change(self, event: Event) -> None:
+        """Debounce bursts of price updates before re-rendering."""
+        if self._btc_debounce_unsub:
+            self._btc_debounce_unsub()
+        self._btc_debounce_unsub = async_call_later(
+            self.hass, 10, self._btc_debounced_refresh
+        )
+
+    @callback
+    def _btc_debounced_refresh(self, _now) -> None:
+        self._btc_debounce_unsub = None
+        if self._btc_cfg:
+            self.hass.async_create_task(self.async_show_bitcoin(self._btc_cfg))
+
+    async def async_stop_bitcoin_mode(self) -> None:
+        """Stop Bitcoin ticker tracking."""
+        if self._btc_debounce_unsub:
+            self._btc_debounce_unsub()
+            self._btc_debounce_unsub = None
+        for unsub in self._btc_unsubs:
+            unsub()
+        if self._btc_unsubs or self._btc_cfg:
+            _LOGGER.debug("Bitcoin mode stopped")
+        self._btc_unsubs = []
+        self._btc_cfg = None
+        self._btc_signature = None
+
+    # ------------------------------------------------------------------
+    # CO2 gauge mode
+    # ------------------------------------------------------------------
+
+    async def async_show_co2(self, cfg: dict, force: bool = False) -> bool:
+        """Render the CO2 gauge GIF and upload it to the device."""
+        async with self._co2_lock:
+            ppm = self._read_float_state(cfg.get("co2_entity"))
+            if ppm is None:
+                _LOGGER.warning(
+                    "CO2 mode: entity %s has no numeric state",
+                    cfg.get("co2_entity"),
+                )
+                return False
+
+            data = CO2Data(ppm=ppm)
+            signature = data.signature()
+            if not force and signature == self._co2_signature:
+                _LOGGER.debug("CO2 unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_co2_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._co2_signature = signature
+                _LOGGER.debug(
+                    f"CO2 gauge uploaded: {ppm:.0f} ppm, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("CO2 gauge upload failed")
+            return success
+
+    async def async_start_co2_mode(self, cfg: dict) -> None:
+        """Show the CO2 gauge and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._co2_cfg = cfg
+        entities = [e for e in (cfg.get("co2_entity"),) if e]
+        if entities:
+            _LOGGER.info(f"CO2 mode tracking entities: {entities}")
+            self._co2_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_co2_state_change
+                )
+            )
+        await self.async_show_co2(cfg, force=True)
+
+    @callback
+    def _on_co2_state_change(self, event: Event) -> None:
+        if self._co2_debounce_unsub:
+            self._co2_debounce_unsub()
+        self._co2_debounce_unsub = async_call_later(
+            self.hass, 30, self._co2_debounced_refresh
+        )
+
+    @callback
+    def _co2_debounced_refresh(self, _now) -> None:
+        self._co2_debounce_unsub = None
+        if self._co2_cfg:
+            self.hass.async_create_task(self.async_show_co2(self._co2_cfg))
+
+    async def async_stop_co2_mode(self) -> None:
+        """Stop CO2 gauge tracking."""
+        if self._co2_debounce_unsub:
+            self._co2_debounce_unsub()
+            self._co2_debounce_unsub = None
+        for unsub in self._co2_unsubs:
+            unsub()
+        if self._co2_unsubs or self._co2_cfg:
+            _LOGGER.debug("CO2 mode stopped")
+        self._co2_unsubs = []
+        self._co2_cfg = None
+        self._co2_signature = None
+
+    # ------------------------------------------------------------------
+    # Power gauge mode
+    # ------------------------------------------------------------------
+
+    async def async_show_power(self, cfg: dict, force: bool = False) -> bool:
+        """Render the power gauge GIF and upload it to the device."""
+        async with self._power_lock:
+            watts = self._read_float_state(cfg.get("power_entity"))
+            if watts is None:
+                _LOGGER.warning(
+                    "Power mode: entity %s has no numeric state",
+                    cfg.get("power_entity"),
+                )
+                return False
+
+            heat = self._read_climate_zone(cfg.get("heat_entity"), "heat")
+            cool = self._read_climate_zone(cfg.get("cool_entity"), "cool")
+            data = PowerData(
+                watts=watts,
+                heating=bool(heat and heat.active),
+                cooling=bool(cool and cool.active),
+            )
+            signature = data.signature()
+            if not force and signature == self._power_signature:
+                _LOGGER.debug("Power unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_power_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._power_signature = signature
+                _LOGGER.debug(
+                    f"Power gauge uploaded: {watts:.0f} W, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Power gauge upload failed")
+            return success
+
+    async def async_start_power_mode(self, cfg: dict) -> None:
+        """Show the power gauge and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._power_cfg = cfg
+        entities = [
+            e for e in (cfg.get("power_entity"), cfg.get("heat_entity"),
+                        cfg.get("cool_entity")) if e
+        ]
+        if entities:
+            _LOGGER.info(f"Power mode tracking entities: {entities}")
+            self._power_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_power_state_change
+                )
+            )
+        await self.async_show_power(cfg, force=True)
+
+    @callback
+    def _on_power_state_change(self, event: Event) -> None:
+        # Throttle rather than debounce: the power sensor updates almost
+        # continuously, so a resetting debounce timer would never fire.
+        if self._power_throttle_unsub:
+            return
+        self._power_throttle_unsub = async_call_later(
+            self.hass, 15, self._power_throttled_refresh
+        )
+
+    @callback
+    def _power_throttled_refresh(self, _now) -> None:
+        self._power_throttle_unsub = None
+        if self._power_cfg:
+            self.hass.async_create_task(self.async_show_power(self._power_cfg))
+
+    async def async_stop_power_mode(self) -> None:
+        """Stop power gauge tracking."""
+        if self._power_throttle_unsub:
+            self._power_throttle_unsub()
+            self._power_throttle_unsub = None
+        for unsub in self._power_unsubs:
+            unsub()
+        if self._power_unsubs or self._power_cfg:
+            _LOGGER.debug("Power mode stopped")
+        self._power_unsubs = []
+        self._power_cfg = None
+        self._power_signature = None
+
+    # ------------------------------------------------------------------
+    # Thermostat mode
+    # ------------------------------------------------------------------
+
+    async def async_show_thermostat(self, cfg: dict,
+                                    force: bool = False) -> bool:
+        """Render the thermostat status GIF and upload it to the device."""
+        async with self._thermostat_lock:
+            heat = self._read_climate_zone(cfg.get("heat_entity"), "heat")
+            cool = self._read_climate_zone(cfg.get("cool_entity"), "cool")
+            if heat is None and cool is None:
+                _LOGGER.warning(
+                    "Thermostat mode: no usable climate state from %s / %s",
+                    cfg.get("heat_entity"), cfg.get("cool_entity"),
+                )
+                return False
+
+            data = ThermostatData(heat=heat, cool=cool)
+            signature = data.signature()
+            if not force and signature == self._thermostat_signature:
+                _LOGGER.debug("Thermostat unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_thermostat_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._thermostat_signature = signature
+                _LOGGER.debug(
+                    f"Thermostat uploaded: {signature}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Thermostat upload failed")
+            return success
+
+    async def async_start_thermostat_mode(self, cfg: dict) -> None:
+        """Show the thermostat status and keep it updated automatically."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._thermostat_cfg = cfg
+        entities = [
+            e for e in (cfg.get("heat_entity"), cfg.get("cool_entity")) if e
+        ]
+        if entities:
+            _LOGGER.info(f"Thermostat mode tracking entities: {entities}")
+            self._thermostat_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, entities, self._on_thermostat_state_change
+                )
+            )
+        await self.async_show_thermostat(cfg, force=True)
+
+    @callback
+    def _on_thermostat_state_change(self, event: Event) -> None:
+        # Short debounce: a setpoint change and the resulting hvac_action
+        # flip usually arrive within a second or two of each other.
+        if self._thermostat_debounce_unsub:
+            self._thermostat_debounce_unsub()
+        self._thermostat_debounce_unsub = async_call_later(
+            self.hass, 5, self._thermostat_debounced_refresh
+        )
+
+    @callback
+    def _thermostat_debounced_refresh(self, _now) -> None:
+        self._thermostat_debounce_unsub = None
+        if self._thermostat_cfg:
+            self.hass.async_create_task(
+                self.async_show_thermostat(self._thermostat_cfg)
+            )
+
+    async def async_stop_thermostat_mode(self) -> None:
+        """Stop thermostat tracking."""
+        if self._thermostat_debounce_unsub:
+            self._thermostat_debounce_unsub()
+            self._thermostat_debounce_unsub = None
+        for unsub in self._thermostat_unsubs:
+            unsub()
+        if self._thermostat_unsubs or self._thermostat_cfg:
+            _LOGGER.debug("Thermostat mode stopped")
+        self._thermostat_unsubs = []
+        self._thermostat_cfg = None
+        self._thermostat_signature = None
+
+    # ------------------------------------------------------------------
+    # Sun arc mode
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fmt_clock(dt, hour24: bool) -> str:
+        dt = dt_util.as_local(dt)
+        if hour24:
+            return f"{dt.hour}:{dt.minute:02d}"
+        h = dt.hour % 12 or 12
+        return f"{h}:{dt.minute:02d}"
+
+    @staticmethod
+    def _fmt_span(delta) -> str:
+        mins = max(0, int(delta.total_seconds() // 60))
+        h, m = divmod(mins, 60)
+        return f"{h}H{m:02d}M" if h else f"{m}M"
+
+    def _build_sun_data(self, cfg: dict) -> SunData | None:
+        """Work out where we are between sunrise and sunset right now."""
+        now = dt_util.now()
+        today = now.date()
+        rise = get_astral_event_date(self.hass, "sunrise", today)
+        sset = get_astral_event_date(self.hass, "sunset", today)
+        if rise is None or sset is None:
+            return None
+        rise, sset = dt_util.as_local(rise), dt_util.as_local(sset)
+        hour24 = bool(cfg.get("hour24", True))
+
+        if rise <= now < sset:
+            is_day, start, end = True, rise, sset
+            countdown = "SET " + self._fmt_span(sset - now)
+            show_rise, show_set = rise, sset
+        elif now < rise:
+            prev_set = get_astral_event_date(
+                self.hass, "sunset", today - timedelta(days=1))
+            is_day, start, end = False, dt_util.as_local(prev_set), rise
+            countdown = "RISE " + self._fmt_span(rise - now)
+            show_rise, show_set = rise, sset
+        else:
+            next_rise = get_astral_event_date(
+                self.hass, "sunrise", today + timedelta(days=1))
+            is_day, start, end = False, sset, dt_util.as_local(next_rise)
+            countdown = "RISE " + self._fmt_span(end - now)
+            show_rise, show_set = end, sset
+
+        span = (end - start).total_seconds()
+        progress = 0.0 if span <= 0 else (now - start).total_seconds() / span
+        progress = max(0.0, min(1.0, progress))
+
+        return SunData(
+            is_day=is_day,
+            progress=progress,
+            rise_txt=self._fmt_clock(show_rise, hour24),
+            set_txt=self._fmt_clock(show_set, hour24),
+            countdown_txt=countdown,
+            daylight_txt="DAY " + self._fmt_span(sset - rise),
+        )
+
+    async def async_show_sun(self, cfg: dict, force: bool = False) -> bool:
+        """Render the sun arc GIF and upload it to the device."""
+        async with self._sun_lock:
+            data = self._build_sun_data(cfg)
+            if data is None:
+                _LOGGER.warning(
+                    "Sun mode: no sunrise/sunset available (check the "
+                    "home location in Home Assistant)"
+                )
+                return False
+
+            signature = data.signature()
+            if not force and signature == self._sun_signature:
+                _LOGGER.debug("Sun arc unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_sun_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._sun_signature = signature
+                _LOGGER.debug(
+                    f"Sun arc uploaded: {data.countdown_txt}, "
+                    f"progress {data.progress:.2f}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Sun arc upload failed")
+            return success
+
+    async def async_start_sun_mode(self, cfg: dict) -> None:
+        """Show the sun arc and keep it updated every minute."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._sun_cfg = cfg
+        # The countdown ticks once a minute; the signature check skips the
+        # upload whenever nothing visible has changed.
+        self._sun_unsub = async_track_time_change(
+            self.hass, self._on_sun_minute, second=0
+        )
+        await self.async_show_sun(cfg, force=True)
+
+    @callback
+    def _on_sun_minute(self, _now) -> None:
+        if self._sun_cfg:
+            self.hass.async_create_task(self.async_show_sun(self._sun_cfg))
+
+    async def async_stop_sun_mode(self) -> None:
+        """Stop sun arc tracking."""
+        if self._sun_unsub:
+            self._sun_unsub()
+            self._sun_unsub = None
+        if self._sun_cfg:
+            _LOGGER.debug("Sun mode stopped")
+        self._sun_cfg = None
+        self._sun_signature = None
+
+    # ------------------------------------------------------------------
+    # Moon phase mode
+    # ------------------------------------------------------------------
+
+    async def async_show_moon(self, cfg: dict, force: bool = False) -> bool:
+        """Render the moon phase GIF and upload it to the device."""
+        async with self._moon_lock:
+            south = (self.hass.config.latitude or 0) < 0
+            data = MoonData(age=moon_age(dt_util.utcnow()), south=south)
+            signature = data.signature()
+            if not force and signature == self._moon_signature:
+                _LOGGER.debug("Moon phase unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_moon_gif, data, size
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._moon_signature = signature
+                _LOGGER.debug(
+                    f"Moon phase uploaded: age {data.age:.1f}d, "
+                    f"{data.pct_txt()}, {len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Moon phase upload failed")
+            return success
+
+    async def async_start_moon_mode(self, cfg: dict) -> None:
+        """Show the moon phase and refresh it hourly."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._moon_cfg = cfg
+        # The phase moves ~3% per day; an hourly check with the signature
+        # guard uploads only when a visible value actually changes.
+        self._moon_unsub = async_track_time_change(
+            self.hass, self._on_moon_hour, minute=0, second=30
+        )
+        await self.async_show_moon(cfg, force=True)
+
+    @callback
+    def _on_moon_hour(self, _now) -> None:
+        if self._moon_cfg:
+            self.hass.async_create_task(self.async_show_moon(self._moon_cfg))
+
+    async def async_stop_moon_mode(self) -> None:
+        """Stop moon phase tracking."""
+        if self._moon_unsub:
+            self._moon_unsub()
+            self._moon_unsub = None
+        if self._moon_cfg:
+            _LOGGER.debug("Moon mode stopped")
+        self._moon_cfg = None
+        self._moon_signature = None
+
+    # ------------------------------------------------------------------
+    # One-shot messages
+    # ------------------------------------------------------------------
+
+    def _snapshot_mode(self) -> tuple | None:
+        """Capture whichever display mode is active so it can be restored."""
+        for name, cfg in (
+            ("weather", self._weather_cfg),
+            ("bitcoin", self._btc_cfg),
+            ("co2", self._co2_cfg),
+            ("power", self._power_cfg),
+            ("thermostat", self._thermostat_cfg),
+            ("sun", self._sun_cfg),
+            ("moon", self._moon_cfg),
+            ("clock", self._clock_cfg),
+            ("gif", self._gif_cfg),
+        ):
+            if cfg:
+                return name, dict(cfg)
+        return None
+
+    async def _restore_mode(self, snapshot: tuple) -> None:
+        name, cfg = snapshot
+        _LOGGER.debug(f"Message finished, restoring {name} mode")
+        starters = {
+            "weather": self.async_start_weather_mode,
+            "bitcoin": self.async_start_bitcoin_mode,
+            "co2": self.async_start_co2_mode,
+            "power": self.async_start_power_mode,
+            "thermostat": self.async_start_thermostat_mode,
+            "sun": self.async_start_sun_mode,
+            "moon": self.async_start_moon_mode,
+            "clock": self.async_start_clock_mode,
+        }
+        if name == "gif":
+            await self.async_display_gif(**cfg)
+        elif name in starters:
+            await starters[name](cfg)
+
+    async def _stop_modes_for_message(self) -> None:
+        """Stop every display mode except the message itself."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+
+    async def async_show_message(self, cfg: dict) -> bool:
+        """Show a one-shot message, then restore the previous display."""
+        async with self._message_lock:
+            # A message interrupting another message keeps the original
+            # snapshot so we restore what was on before the first one.
+            prev = self._message_prev if self._message_cfg \
+                else self._snapshot_mode()
+            woke = self._message_woke_screen if self._message_cfg else False
+            if self._message_unsub:
+                self._message_unsub()
+                self._message_unsub = None
+            self._message_cfg = None
+            self._message_prev = None
+
+            await self._stop_modes_for_message()
+
+            spec = MessageSpec(
+                text=str(cfg.get("message") or ""),
+                style=cfg.get("style") or "card",
+                icon=cfg.get("icon") or None,
+                color=cfg.get("color"),
+                rainbow=bool(cfg.get("rainbow", False)),
+                font=cfg.get("font") or "pixel",
+            )
+            size = int(cfg.get("pixel_size") or 64)
+            gif_bytes = await self.hass.async_add_executor_job(
+                render_message_gif, spec, size
+            )
+
+            if not self.text_settings.get("is_on", True):
+                # Wake a darkened panel so the message is actually seen
+                try:
+                    async with self._device_lock:
+                        await Common().screenOn()
+                    self.text_settings["is_on"] = True
+                    woke = True
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(f"Could not wake screen for message: {err}")
+
+            success = await self._upload_single(gif_bytes)
+            if not success:
+                _LOGGER.error("Message upload failed")
+                if prev:
+                    await self._restore_mode(prev)
+                return False
+
+            self._message_cfg = cfg
+            self._message_prev = prev
+            self._message_woke_screen = woke
+            duration = float(cfg.get("duration", 15) or 0)
+            _LOGGER.debug(
+                f"Message shown ({spec.style}, {len(gif_bytes)} bytes), "
+                f"restore in {duration:.0f}s: {prev[0] if prev else 'nothing'}"
+            )
+            if duration > 0:
+                self._message_unsub = async_call_later(
+                    self.hass, duration, self._on_message_expired
+                )
+            return True
+
+    @callback
+    def _on_message_expired(self, _now) -> None:
+        self._message_unsub = None
+        self.hass.async_create_task(self.async_end_message())
+
+    async def async_end_message(self) -> None:
+        """End the current message and bring back what was showing."""
+        if not self._message_cfg:
+            return
+        prev, woke = self._message_prev, self._message_woke_screen
+        await self.async_stop_message_mode()
+        if prev:
+            await self._restore_mode(prev)
+        if woke:
+            try:
+                async with self._device_lock:
+                    await Common().screenOff()
+                self.text_settings["is_on"] = False
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(f"Could not darken screen after message: {err}")
+
+    async def async_stop_message_mode(self) -> None:
+        """Forget the current message without restoring anything."""
+        if self._message_unsub:
+            self._message_unsub()
+            self._message_unsub = None
+        if self._message_cfg:
+            _LOGGER.debug("Message mode stopped")
+        self._message_cfg = None
+        self._message_prev = None
+        self._message_woke_screen = False
+
+    # ------------------------------------------------------------------
+    # Clock mode
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clock_color(cfg: dict) -> tuple:
+        c = cfg.get("color")
+        if not c:
+            # Green tint for the analog dial, sky blue for the pixel face
+            c = [100, 210, 110] if cfg.get("face") == "analog" else [100, 180, 255]
+        return (int(c[0]), int(c[1]), int(c[2]))
+
+    async def async_show_clock(self, cfg: dict, force: bool = False) -> bool:
+        """Show the clock: custom 'pixel' face or a native device style."""
+        async with self._clock_lock:
+            face = cfg.get("face", "pixel")
+            now = dt_util.now()
+
+            if face not in ("pixel", "analog"):
+                # Native firmware clock: sync time, then set the style.
+                # The device renders and updates it on its own after this.
+                async def _sync_and_set_clock():
+                    await Common().setTime(
+                        now.year, now.month, now.day,
+                        now.hour, now.minute, now.second,
+                    )
+                    r, g, b = self._clock_color(cfg)
+                    return await Clock().setMode(
+                        style=int(face),
+                        visibleDate=cfg.get("show_date", True),
+                        hour24=cfg.get("hour24", True),
+                        r=r, g=g, b=b,
+                    )
+
+                result = await self._device_call(_sync_and_set_clock)
+                if result is False:
+                    _LOGGER.error(
+                        "Clock mode: could not set native style %s "
+                        "(invalid style or BLE write failed)", face
+                    )
+                    return False
+                _LOGGER.debug("Native clock style %s enabled", face)
+                return True
+
+            data = ClockFaceData(
+                hour=now.hour,
+                minute=now.minute,
+                weekday=now.weekday(),
+                month=now.month,
+                day=now.day,
+                hour24=cfg.get("hour24", True),
+                show_date=cfg.get("show_date", True),
+            )
+            signature = data.signature()
+            if not force and signature == self._clock_signature:
+                _LOGGER.debug("Clock unchanged, skipping upload")
+                return True
+
+            size = int(cfg.get("pixel_size") or 64)
+            render = render_analog_gif if face == "analog" else render_clockface_gif
+            gif_bytes = await self.hass.async_add_executor_job(
+                render, data, size, self._clock_color(cfg)
+            )
+
+            success = await self._upload_single(gif_bytes)
+
+            if success:
+                self._clock_signature = signature
+                _LOGGER.debug(
+                    f"Clock face uploaded: {data.hour:02d}:{data.minute:02d}, "
+                    f"{len(gif_bytes)} bytes"
+                )
+            else:
+                _LOGGER.error("Clock face upload failed")
+            return success
+
+    async def async_start_clock_mode(self, cfg: dict) -> None:
+        """Show the clock and keep the pixel face updated every minute."""
+        await self.async_stop_gif_rotation()
+        await self.async_stop_weather_mode()
+        await self.async_stop_bitcoin_mode()
+        await self.async_stop_co2_mode()
+        await self.async_stop_power_mode()
+        await self.async_stop_thermostat_mode()
+        await self.async_stop_sun_mode()
+        await self.async_stop_moon_mode()
+        await self.async_stop_clock_mode()
+        await self.async_stop_message_mode()
+
+        self._clock_cfg = cfg
+        if cfg.get("face", "pixel") in ("pixel", "analog"):
+            # Re-upload on each minute boundary; the native styles keep
+            # time on the device itself and need no listener.
+            self._clock_unsub = async_track_time_change(
+                self.hass, self._on_clock_minute, second=0
+            )
+        await self.async_show_clock(cfg, force=True)
+
+    @callback
+    def _on_clock_minute(self, _now) -> None:
+        if self._clock_cfg:
+            self.hass.async_create_task(self.async_show_clock(self._clock_cfg))
+
+    async def async_stop_clock_mode(self) -> None:
+        """Stop clock tracking."""
+        if self._clock_unsub:
+            self._clock_unsub()
+            self._clock_unsub = None
+        if self._clock_cfg:
+            _LOGGER.debug("Clock mode stopped")
+        self._clock_cfg = None
+        self._clock_signature = None
