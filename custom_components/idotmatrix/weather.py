@@ -649,8 +649,11 @@ def _assemble_gif(pframes: list, duration: int) -> bytes:
             out += b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
         elif header != header0:
             raise ValueError("frame palettes diverged")
-        # Graphic Control Extension: disposal=2 (restore to background)
-        out += bytes([0x21, 0xF9, 0x04, 0x08,
+        # Graphic Control Extension: disposal=1 (leave frame in place).
+        # Every frame is full-size, so nothing needs restoring, and an
+        # embedded decoder that paints the "background" on disposal=2
+        # would otherwise flash the screen to palette index 0.
+        out += bytes([0x21, 0xF9, 0x04, 0x04,
                       delay_cs & 0xFF, (delay_cs >> 8) & 0xFF, 0x00, 0x00])
         out += desc + lzw
     out += b"\x3b"
@@ -671,10 +674,25 @@ def frames_to_gif(frames: list, duration: int) -> bytes:
         palette = sheet.quantize(colors=64, method=Image.Quantize.MAXCOVERAGE)
     except Exception:
         palette = sheet.quantize(colors=64)
-    full_palette = (palette.getpalette() + [0] * 768)[:768]
+    # Put black at index 0. The logical screen descriptor names index 0
+    # as the background color, and the device applies a new file's palette
+    # before its frame data arrives; with white at index 0 (the quantizer's
+    # usual choice) that shows up as a "negative" flash on the panel.
+    raw = palette.getpalette()
+    n_colors = max(1, len(raw) // 3)
+    entries = [tuple(raw[i * 3:i * 3 + 3]) for i in range(n_colors)]
+    darkest = min(range(n_colors), key=lambda i: sum(entries[i]))
+    order = [darkest] + [i for i in range(n_colors) if i != darkest]
+    remap = {src: dst for dst, src in enumerate(order)}
+    reordered = []
+    for i in order:
+        reordered.extend(entries[i])
+    full_palette = (reordered + [0] * 768)[:768]
+    lut = [remap.get(i, 0) for i in range(256)]
     pframes = []
     for fr in frames:
         q = fr.quantize(palette=palette, dither=Image.Dither.NONE)
+        q = q.point(lut)
         q.putpalette(full_palette)
         pframes.append(q)
 
@@ -690,7 +708,7 @@ def frames_to_gif(frames: list, duration: int) -> bytes:
             append_images=pframes[1:],
             loop=0,
             duration=duration,
-            disposal=2,
+            disposal=1,
         )
         return buf.getvalue()
 

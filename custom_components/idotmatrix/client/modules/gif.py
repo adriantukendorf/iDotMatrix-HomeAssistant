@@ -22,7 +22,37 @@ class Gif:
             bytes: returns the file contents
         """
         with open(file_path, "rb") as file:
-            return file.read()
+            return self._normalize_background(file.read())
+
+    @staticmethod
+    def _normalize_background(data: bytes) -> bytes:
+        """Point the GIF's background color index at its darkest palette
+        entry without re-encoding anything.
+
+        The device appears to apply a new file's global palette (and its
+        declared background) before the frame data has arrived, so a file
+        whose index 0 is bright paints the panel white or in wrong colors
+        for the length of the upload. Rendered GIFs already put black at
+        index 0; this covers user-supplied files such as the photo folder.
+        """
+        try:
+            if len(data) < 14 or data[:3] != b"GIF":
+                return data
+            packed = data[10]
+            if not packed & 0x80:
+                return data
+            n = 2 << (packed & 7)
+            gct = data[13:13 + n * 3]
+            if len(gct) < n * 3:
+                return data
+            darkest = min(range(n), key=lambda i: gct[i * 3] + gct[i * 3 + 1] + gct[i * 3 + 2])
+            if data[11] == darkest:
+                return data
+            out = bytearray(data)
+            out[11] = darkest
+            return bytes(out)
+        except Exception:  # noqa: BLE001
+            return data
 
     def _splitIntoChunks(self, data: bytearray, chunk_size: int) -> List[bytearray]:
         """Split the data into chunks of specified size.
